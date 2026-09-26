@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Match the version the bot runs on in production.
+          node-version: '22'
+          cache: npm
+
+      # `npm ci` installs exactly what package-lock.json pins, and fails if the
+      # lockfile and package.json have drifted apart. That second property is
+      # the reason to prefer it over `npm install` in CI.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Nothing here touches a real toy, a real Discord server, or a real
+      # Lovense account: the tests exercise pure logic and state machines with
+      # the placeholder credentials in .env.test. That is deliberate — a test
+      # suite you are afraid to run is one you stop running.
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if a real .env was committed
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env is tracked by git. It holds live credentials."
+            echo "Remove it with: git rm --cached .env"
+            exit 1
+          fi
+          echo "No tracked .env — good."
+
+      - name: Fail on anything shaped like a live credential
+        run: |
+          # Discord bot tokens look like <base64 id>.<base64>.<base64>.
+          # Lovense developer tokens are long base64 blobs.
+          # .env.example and .env.test hold placeholders and are excluded.
+          if git grep -nIE '[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}' \
+               -- ':!*.example' ':!.env.test' ':!.github/*'; then
+            echo "::error::Something matching a Discord token shape is committed."
+            exit 1
+          fi
+          echo "No credential-shaped strings found."

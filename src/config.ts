@@ -1,0 +1,126 @@
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import 'dotenv/config';
+import { z } from 'zod';
+
+const bool = z
+  .string()
+  .optional()
+  .transform((v) => v === 'true' || v === '1');
+
+const schema = z.object({
+  DISCORD_TOKEN: z.string().min(1),
+  DISCORD_CLIENT_ID: z.string().min(1),
+  DISCORD_GUILD_ID: z.string().min(1),
+  TRIGGER_CHANNEL_ID: z.string().min(1),
+
+  LOVENSE_TOKEN: z.string().min(1),
+  USER_TOKEN_SALT: z.string().min(16, 'must be at least 16 chars'),
+
+  CALLBACK_PORT: z.coerce.number().int().positive().default(4000),
+  CALLBACK_PATH: z.string().startsWith('/').default('/lovense/callback'),
+  CALLBACK_BIND: z.string().default('127.0.0.1'),
+
+  DATABASE_PATH: z.string().default('./data/bot.db'),
+
+  BUZZ_INTENSITY_PERCENT: z.coerce.number().min(0).max(100).default(50),
+  BUZZ_DURATION_SEC: z.coerce.number().min(0).default(1.5),
+  MAX_INTENSITY_PERCENT: z.coerce.number().min(1).max(100).default(100),
+
+  MIN_COMMAND_INTERVAL_MS: z.coerce.number().int().min(0).default(1500),
+  MAX_COMMANDS_PER_MINUTE: z.coerce.number().int().min(1).default(25),
+  // Tuned for multi-hour sessions. Still a dead-man's switch, just a long one.
+  SESSION_TIMEOUT_MINUTES: z.coerce.number().min(1).max(1440).default(240),
+
+  // Liveness. Requires "heartbeat" to be enabled in the Lovense developer
+  // dashboard — without it, Lovense Remote only calls back once at pairing
+  // time and every link would look stale. Set to 0 to disable the check.
+  //
+  // 300s is deliberately generous: iOS suspends background apps, so heartbeats
+  // arrive in clusters with long gaps rather than on a clean interval.
+  HEARTBEAT_TIMEOUT_SEC: z.coerce.number().min(0).default(300),
+  PRESENCE_POLL_SEC: z.coerce.number().min(5).default(15),
+
+  // When a toy goes offline mid-session the session is SUSPENDED, not ended,
+  // and resumes by itself if the toy comes back within this window. Only
+  // after the window closes is it disarmed for real. Set to 0 to disarm
+  // immediately on the first blip.
+  OFFLINE_GRACE_SEC: z.coerce.number().min(0).default(300),
+
+  // iOS may drop the first command sent to a freshly-woken app. Retry a
+  // retryable failure (507 / network) this many times before giving up.
+  WAKE_RETRY_ATTEMPTS: z.coerce.number().int().min(0).max(5).default(2),
+  WAKE_RETRY_DELAY_MS: z.coerce.number().int().min(100).default(700),
+
+  // DM the toy's owner when their link drops. A channel message is easy to
+  // miss; a DM raises a push notification on the phone that needs the fix.
+  // iOS cannot be automated into restarting the Lovense app, so a human
+  // tapping the notification is the recovery path.
+  DM_ON_DISCONNECT: z
+    .string()
+    .optional()
+    .transform((v) => v !== 'false' && v !== '0'),
+  // Minimum gap between disconnect DMs for the same person, so a flapping
+  // connection doesn't turn into a notification storm.
+  DM_COOLDOWN_SEC: z.coerce.number().min(0).default(600),
+
+  TRIGGER_ON_BOT_MESSAGES: bool,
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+});
+
+/**
+ * `dotenv/config` fails silently: a missing .env, an unreadable one and an
+ * empty one all leave process.env untouched, and the only symptom is every
+ * required key reporting "Required". That sends you looking for a quoting
+ * problem in a file the process never opened. Work out which it actually is.
+ */
+function diagnoseEnvFile(): string | null {
+  const envPath = resolve(process.cwd(), '.env');
+
+  if (!existsSync(envPath)) {
+    return (
+      `No .env file found at ${envPath}\n` +
+      `  Either it was never created (cp .env.example .env), or this command\n` +
+      `  is running from the wrong directory — dotenv looks in the current\n` +
+      `  working directory, not next to the script.`
+    );
+  }
+
+  try {
+    accessSync(envPath, constants.R_OK);
+  } catch {
+    return (
+      `${envPath} exists but this process cannot read it.\n` +
+      `  Running as uid ${process.getuid?.() ?? '?'}. Check owner and mode:\n` +
+      `      ls -l ${envPath}\n` +
+      `  It must be owned by the user the bot runs as. To fix:\n` +
+      `      sudo chown lovensebot:lovensebot ${envPath} && sudo chmod 600 ${envPath}`
+    );
+  }
+
+  if (statSync(envPath).size === 0) {
+    return `${envPath} is empty. Copy .env.example over it and fill in the credentials.`;
+  }
+
+  return null;
+}
+
+const parsed = schema.safeParse(process.env);
+
+if (!parsed.success) {
+  const issues = parsed.error.issues
+    .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
+    .join('\n');
+
+  const fileProblem = diagnoseEnvFile();
+
+  console.error(
+    fileProblem
+      ? `Configuration could not be loaded.\n\n${fileProblem}\n\nMissing or invalid:\n${issues}`
+      : `Invalid configuration. Check your .env file:\n${issues}`,
+  );
+  process.exit(1);
+}
+
+export const config = parsed.data;
+export type Config = typeof config;

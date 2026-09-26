@@ -1,0 +1,53 @@
+[Unit]
+Description=Shortwave Lovense Discord bot
+Documentation=file:/opt/lovense-bot/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lovensebot
+Group=lovensebot
+WorkingDirectory=/opt/lovense-bot
+EnvironmentFile=/opt/lovense-bot/.env
+ExecStart=/usr/local/bin/node /opt/lovense-bot/dist/index.js
+
+# Restart on crash, but back off so a bad config doesn't spin the CPU.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# SIGTERM triggers the shutdown handler, which stops every toy before exit.
+# TimeoutStopSec gives those Stop commands time to reach Lovense's API.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lovense-bot
+
+# --- Hardening ---------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# The SQLite database is the only thing the bot writes.
+ReadWritePaths=/opt/lovense-bot/data
+
+# Low-memory variant: 400M suits a Pi 3 B with 1 GB total that may also be
+# running RetroPie, so the bot can never starve anything else. On a host with
+# 2 GB or more use lovense-bot.service instead.
+# Note this caps the running service only, not `npm ci` or `npm run build`.
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

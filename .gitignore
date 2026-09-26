@@ -1,0 +1,24 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Runtime state — the SQLite database holds toy links
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Credentials. .env.example and .env.test hold only placeholders and ARE
+# committed; any other .env file is real and must never be.
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Logs and editor noise
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/

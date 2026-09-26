@@ -1,0 +1,25 @@
+# Copy to /etc/cloudflared/config.yml after creating a named tunnel, then
+# replace <TUNNEL-UUID> and the hostname. See DEPLOY.md, "Expose the callback
+# URL".
+#
+# The credentials JSON is written to ~/.cloudflared/<TUNNEL-UUID>.json by
+# `cloudflared tunnel create`. Copy it to /etc/cloudflared/ so the systemd
+# service (which runs as root) can read it from a fixed path.
+
+tunnel: shortwave
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  # Only the two paths the bot actually serves are exposed. Everything else
+  # gets a 404, so the tunnel is not a general door into your network.
+  - hostname: lovense.example.com
+    path: ^/lovense/callback$
+    service: http://127.0.0.1:4000
+
+  # Health check, handy for confirming the tunnel reaches the bot.
+  - hostname: lovense.example.com
+    path: ^/healthz$
+    service: http://127.0.0.1:4000
+
+  # Required catch-all.
+  - service: http_status:404
