@@ -10,8 +10,9 @@ disarms.
 **Setting this up? Follow [DEPLOY.md](DEPLOY.md)** — a linear,
 copy-pasteable walkthrough from bare host to working bot. This README is the
 reference behind it: architecture, configuration, extension points and
-troubleshooting. [TESTING.md](TESTING.md) covers the test suite and how the
-test, staging and production environments are kept apart.
+troubleshooting. [WORKFLOW.md](WORKFLOW.md) covers the day-to-day loop — edit,
+test, push, deploy, roll back. [TESTING.md](TESTING.md) covers the test suite
+and how the test, staging and production environments are kept apart.
 
 ---
 
@@ -34,6 +35,7 @@ Hosting notes for specific platforms:
 
 ## Contents
 
+0. [Workflow](WORKFLOW.md) — develop, test, deploy, roll back
 0. [Testing](TESTING.md) — suite, environments, adding tests
 1. [How it works](#how-it-works)
 2. [Architecture](#architecture)

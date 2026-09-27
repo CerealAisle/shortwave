@@ -20,5 +20,10 @@ data/
 *.log
 npm-debug.log*
 .DS_Store
-.vscode/
 .idea/
+
+# Editor config: share the two files that keep everyone's setup consistent,
+# ignore the per-machine rest (launch targets, local state).
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json

@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    // Lets VS Code on Windows edit and run things inside WSL.
+    "ms-vscode-remote.remote-wsl",
+    // SSH into the bot VM from the same window.
+    "ms-vscode-remote.remote-ssh",
+    // GitHub Actions run status without leaving the editor.
+    "github.vscode-github-actions",
+    // Shell script linting for deploy/*.sh
+    "timonwong.shellcheck"
+  ]
+}
