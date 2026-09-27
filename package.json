@@ -1,6 +1,6 @@
 {
   "name": "lovense-discord-bot",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "Private Discord bot bridging Discord message events to Lovense toys via the Lovense Cloud (Standard Server) API.",
   "main": "dist/index.js",

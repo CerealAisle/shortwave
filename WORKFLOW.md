@@ -92,6 +92,42 @@ sudo chmod +x /opt/lovense-bot/deploy/update.sh
 
 ---
 
+## Which user to use on the VM
+
+Short answer: **root**, via `sudo -i`. That's what you've been doing and it's
+correct.
+
+`/opt/lovense-bot` is mode `750` owned by `lovensebot`, so your own account
+can't `cd` into it. That's deliberate — the bot's files and its `.env` belong
+to the service account, not to you. Admin work (systemctl, editing `.env`,
+running the deploy script) needs root anyway.
+
+The one rule that matters: **never run `git` as root inside that directory.**
+Git refuses to operate on a repository owned by someone else and fails with
+`detected dubious ownership`. Always drop to the owner:
+
+```bash
+sudo -u lovensebot git -C /opt/lovense-bot status
+sudo -u lovensebot git -C /opt/lovense-bot log --oneline -5
+```
+
+`deploy/update.sh` does this internally for every git call, so running it with
+`sudo` is right.
+
+If you'd like to browse the directory as yourself, add your account to the
+group. You get read access to the tracked files; `.env` stays `600` so it
+remains owner-only, and you still can't write:
+
+```bash
+sudo usermod -aG lovensebot $USER    # log out and back in
+```
+
+What you should *not* do is `git config --global --add safe.directory`, which
+git suggests in its error message. That silences the guard rather than fixing
+the cause, and the cause here is simply running git as the wrong user.
+
+---
+
 ## The loop
 
 ### Small, low-risk change (docs, a config default, a message string)
