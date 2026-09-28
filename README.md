@@ -11,8 +11,8 @@ disarms.
 copy-pasteable walkthrough from bare host to working bot. This README is the
 reference behind it: architecture, configuration, extension points and
 troubleshooting. [WORKFLOW.md](WORKFLOW.md) covers the day-to-day loop — edit,
-test, push, deploy, roll back. [TESTING.md](TESTING.md) covers the test suite
-and how the test, staging and production environments are kept apart.
+test, push, deploy, roll back. [TESTING.md](TESTING.md) covers the test suite,
+and [STAGING.md](STAGING.md) how to run a staging instance beside production.
 
 ---
 
@@ -37,6 +37,7 @@ Hosting notes for specific platforms:
 
 0. [Workflow](WORKFLOW.md) — develop, test, deploy, roll back
 0. [Testing](TESTING.md) — suite, environments, adding tests
+0. [Staging](STAGING.md) — two instances on one host
 1. [How it works](#how-it-works)
 2. [Architecture](#architecture)
 3. [Control and fail-safes](#control-and-fail-safes)

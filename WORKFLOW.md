@@ -170,6 +170,9 @@ yes, branch.
 
 ### Deploy
 
+Running a staging instance too? Deploy the branch there first — see
+[STAGING.md](STAGING.md).
+
 On the VM:
 
 ```bash

@@ -10,11 +10,20 @@ tunnel: shortwave
 credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
 
 ingress:
-  # Only the two paths the bot actually serves are exposed. Everything else
-  # gets a 404, so the tunnel is not a general door into your network.
+  # --- production, /opt/lovense-bot on :4000 --------------------------------
   - hostname: lovense.example.com
     path: ^/lovense/callback$
     service: http://127.0.0.1:4000
+
+  # --- staging, /opt/lovense-bot-staging on :4001 ---------------------------
+  # Both routes stay configured permanently. Only ONE of them is ever named
+  # in the Lovense dashboard at a time, because Lovense allows a single
+  # callback URL per developer account — so switching which instance receives
+  # callbacks is a one-field edit there, with nothing to change on this host.
+  # Harmless to leave in place if you never run staging.
+  - hostname: lovense.example.com
+    path: ^/staging/callback$
+    service: http://127.0.0.1:4001
 
   # Health check, handy for confirming the tunnel reaches the bot.
   - hostname: lovense.example.com

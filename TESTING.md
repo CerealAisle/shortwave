@@ -38,8 +38,10 @@ applications (so two bot tokens), two `.env` files, and two systemd units on
 different `CALLBACK_PORT`s. That's how a team would do it, because staging
 must never be one typo away from production.
 
-For two people and one bot, that's probably over-engineering. The pragmatic
-middle is one bot with two config files:
+Setting that up is documented in [STAGING.md](STAGING.md).
+
+If you'd rather not run two instances at all, the pragmatic middle is one bot
+with two config files:
 
 ```bash
 /opt/lovense-bot/.env          # production
@@ -51,10 +53,13 @@ rather than an edit to a live config. What matters is that changing
 environments is an explicit act, not something you can do by accident.
 
 One thing that genuinely cannot be duplicated: the **Lovense callback URL** is
-a single global setting on your developer account. Both environments hit the
-same tunnel, so the bot distinguishes them by `uid`
-(`{GUILD_ID}:{USER_ID}`) rather than by endpoint. Worth remembering before
-assuming staging is fully isolated — it isn't, at the Lovense layer.
+a single global setting on your developer account, so only one instance can
+receive pairing callbacks and heartbeats at a time. [STAGING.md](STAGING.md)
+handles that by switching the URL in the dashboard, which works because you
+are never testing and playing simultaneously.
+
+Staging also is not isolated at the Lovense layer — both instances use the
+same developer token, so a command from staging reaches a real toy.
 
 ---
 

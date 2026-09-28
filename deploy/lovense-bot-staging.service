@@ -1,0 +1,54 @@
+# Staging instance. Identical to lovense-bot.service apart from paths, the
+# memory cap, and the fact that it is NOT enabled at boot by default —
+# staging should be something you start deliberately.
+[Unit]
+Description=Shortwave Lovense Discord bot (STAGING)
+Documentation=file:/opt/lovense-bot-staging/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lovensebot
+Group=lovensebot
+WorkingDirectory=/opt/lovense-bot-staging
+EnvironmentFile=/opt/lovense-bot-staging/.env
+ExecStart=/usr/local/bin/node /opt/lovense-bot-staging/dist/index.js
+
+# Restart on crash, but back off so a bad config doesn't spin the CPU.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# SIGTERM triggers the shutdown handler, which stops every toy before exit.
+# TimeoutStopSec gives those Stop commands time to reach Lovense's API.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lovense-bot-staging
+
+# --- Hardening ---------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# The SQLite database is the only thing the bot writes.
+ReadWritePaths=/opt/lovense-bot-staging/data
+
+# Staging shares the host with production, so it gets the smaller cap. If
+# staging ever OOMs before production notices, that is the correct ordering.
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

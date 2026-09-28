@@ -2,7 +2,12 @@
 #
 # Pull the latest main and redeploy. Run on the bot host:
 #
-#     sudo /opt/lovense-bot/deploy/update.sh
+#     sudo /opt/lovense-bot/deploy/update.sh              # production
+#     sudo /opt/lovense-bot-staging/deploy/update.sh      # staging
+#
+# The target instance is derived from where THIS script lives, so it is not
+# possible to run it from the staging checkout and hit production by mistake.
+# The systemd unit name is the directory's basename.
 #
 # Flags:
 #   --yes           skip the "this will disarm any active session" prompt
@@ -14,9 +19,9 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/lovense-bot"
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOT_USER="lovensebot"
-SERVICE="lovense-bot"
+SERVICE="$(basename "$APP_DIR")"
 REF="origin/main"
 ASSUME_YES=false
 RUN_TESTS=true
@@ -38,6 +43,8 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 [[ -d "$APP_DIR/.git" ]] || die "$APP_DIR is not a git checkout. See WORKFLOW.md."
 
 cd "$APP_DIR"
+
+printf '\033[1mInstance:\033[0m %s  (service: %s)\n' "$APP_DIR" "$SERVICE"
 
 # ---------------------------------------------------------------------------
 # EVERY git call goes through this. The script runs as root, but the checkout

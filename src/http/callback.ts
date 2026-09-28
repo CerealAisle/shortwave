@@ -53,18 +53,27 @@ export async function startCallbackServer(
       return reply.code(400).send({ result: false, message: 'missing uid' });
     }
 
+    // Look the uid up before checking the utoken. Nothing is mutated on this
+    // path, so it costs no security, and it produces a far more useful error:
+    // a uid belonging to the other instance reports "unknown uid" rather than
+    // "invalid utoken", which is the difference between diagnosing a wrongly
+    // pointed callback URL in seconds and chasing a phantom auth bug.
+    const link = store.getByUid(body.uid);
+
+    if (!link) {
+      log.warn(
+        `Callback for unknown uid ${body.uid}. If you run a staging instance, ` +
+          'the Lovense callback URL may be pointed at the wrong one.',
+      );
+      return reply.code(404).send({ result: false, message: 'unknown uid' });
+    }
+
     // The uid is public-ish (it appears in the QR flow), so verify the utoken
     // Lovense echoes back before trusting anything in this payload.
     const expected = deriveUserToken(body.uid);
     if (!body.utoken || !safeEqual(body.utoken, expected)) {
       log.warn(`Rejected callback for ${body.uid}: bad utoken`);
       return reply.code(403).send({ result: false, message: 'invalid utoken' });
-    }
-
-    const link = store.getByUid(body.uid);
-    if (!link) {
-      log.warn(`Callback for unknown uid ${body.uid}`);
-      return reply.code(404).send({ result: false, message: 'unknown uid' });
     }
 
     const toys = parseToys(body.toys);
