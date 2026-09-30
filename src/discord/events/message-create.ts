@@ -6,7 +6,7 @@ import { sessions } from '../../session/manager';
 
 /**
  * The trigger path. Guards, in order:
- *   - right guild, right channel
+ *   - right guild, main channel only (the command channel never triggers)
  *   - never our own messages; other bots only if explicitly enabled
  *   - never the toy owner's own messages
  * Whatever survives becomes one buzz per armed session, subject to the
@@ -15,7 +15,7 @@ import { sessions } from '../../session/manager';
 export function registerMessageTrigger(client: Client): void {
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.guildId !== config.DISCORD_GUILD_ID) return;
-    if (message.channelId !== config.TRIGGER_CHANNEL_ID) return;
+    if (message.channelId !== config.MAIN_CHANNEL_ID) return;
     if (message.author.id === client.user?.id) return;
     if (message.author.bot && !config.TRIGGER_ON_BOT_MESSAGES) return;
 
@@ -35,5 +35,5 @@ export function registerMessageTrigger(client: Client): void {
     }
   });
 
-  log.info(`Message trigger active on channel ${config.TRIGGER_CHANNEL_ID}`);
+  log.info(`Message trigger active on channel ${config.MAIN_CHANNEL_ID}`);
 }

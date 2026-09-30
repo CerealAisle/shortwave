@@ -25,7 +25,6 @@ export interface Session {
   guildId: string;
   /** Discord user who owns the toy. Their own messages never trigger it. */
   ownerId: string;
-  channelId: string;
   state: SessionState;
   intensityPercent: number;
   durationSec: number;
@@ -111,7 +110,6 @@ export class SessionManager {
     uid: string;
     guildId: string;
     ownerId: string;
-    channelId: string;
     intensityPercent?: number;
     durationSec?: number;
     timeoutMinutes?: number;
@@ -126,7 +124,6 @@ export class SessionManager {
       uid: params.uid,
       guildId: params.guildId,
       ownerId: params.ownerId,
-      channelId: params.channelId,
       state: 'armed',
       intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
       durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,

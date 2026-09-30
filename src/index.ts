@@ -8,7 +8,14 @@ import { sessions } from './session/manager';
 import { presence } from './session/presence';
 import { store } from './store/store';
 
-async function notify(client: Client, channelId: string, content: string): Promise<void> {
+/**
+ * Post a bot-initiated message. These always go to the command channel,
+ * never the main one: disconnects, resumes and errors are for the person
+ * running the bot, not for the shared conversation. Command replies don't
+ * come through here — they answer wherever the command was run.
+ */
+async function notify(client: Client, content: string): Promise<void> {
+  const channelId = config.COMMAND_CHANNEL_ID;
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel?.type === ChannelType.GuildText) {
@@ -39,7 +46,7 @@ async function dm(client: Client, userId: string, content: string): Promise<void
 async function main() {
   const client = createClient();
 
-  // Session lifecycle notices. Everything the channel needs to know about a
+  // Session lifecycle notices. Everything the command channel needs to know about a
   // session ending, pausing or picking back up comes through here.
   // Disconnect DMs are rate limited per person: a phone that flaps between
   // online and offline would otherwise generate a notification each time.
@@ -61,7 +68,6 @@ async function main() {
         const hours = ((Date.now() - session.armedAt) / 3_600_000).toFixed(1);
         void notify(
           client,
-          session.channelId,
           `${who}'s session hit its auto-off timer after ${hours}h and has been disarmed. ` +
             `${session.triggerCount} buzz(es) total.`,
         );
@@ -71,7 +77,6 @@ async function main() {
         const graceMin = Math.round(config.OFFLINE_GRACE_SEC / 60);
         void notify(
           client,
-          session.channelId,
           `${who}'s toy went quiet — session **paused**, not ended. It resumes by itself ` +
             `if the toy is back within ${graceMin} minutes.\n` +
             `*If the Lovense app looks fine but nothing reaches the toy, force-quit and ` +
@@ -95,7 +100,6 @@ async function main() {
       case 'resumed':
         void notify(
           client,
-          session.channelId,
           `${who}'s toy is back — session **resumed**.` +
             (session.missedCount > 0 ? ` ${session.missedCount} message(s) missed.` : ''),
         );
@@ -103,7 +107,6 @@ async function main() {
       case 'grace-expired':
         void notify(
           client,
-          session.channelId,
           `${who}'s toy did not come back in time — session disarmed. ` +
             'Reconnect in Lovense Remote, then `/on` again.',
         );
@@ -136,7 +139,6 @@ async function main() {
     setTimeout(() => notifiedErrors.delete(session.uid), 120_000).unref?.();
     void notify(
       client,
-      session.channelId,
       `Could not reach <@${session.ownerId}>'s toy: ${error.message}`,
     );
   });
@@ -160,7 +162,6 @@ async function main() {
     const names = toys.map((t) => t.nickName || t.name).join(', ') || 'no toys reported';
     void notify(
       client,
-      config.TRIGGER_CHANNEL_ID,
       `<@${link.discordUserId}> connected successfully (${names}). Use \`/on\` when ready.`,
     );
   });

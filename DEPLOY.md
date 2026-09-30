@@ -18,7 +18,7 @@ them into `.env` in Part 7.
 | 1 | `DISCORD_TOKEN` | Part 1 |
 | 2 | `DISCORD_CLIENT_ID` | Part 1 |
 | 3 | `DISCORD_GUILD_ID` | Part 2 |
-| 4 | `TRIGGER_CHANNEL_ID` | Part 2 |
+| 4 | `MAIN_CHANNEL_ID`, `COMMAND_CHANNEL_ID` | Part 2 |
 | 5 | `LOVENSE_TOKEN` | Part 3 |
 | 6 | VM IP address | Part 4 |
 | 7 | tunnel hostname | Part 6 |
@@ -59,8 +59,11 @@ them into `.env` in Part 7.
 2. Right-click your server icon → **Copy Server ID**.
    → save as `DISCORD_GUILD_ID`
 
-3. Decide which channel triggers buzzes. Right-click it → **Copy Channel ID**.
-   → save as `TRIGGER_CHANNEL_ID`
+3. Pick the two channels, and for each right-click → **Copy Channel ID**:
+   - the shared conversation channel, whose messages trigger buzzes
+     → save as `MAIN_CHANNEL_ID`
+   - a channel only you can see, where the bot posts its own notices
+     → save as `COMMAND_CHANNEL_ID`
 
 ---
 
@@ -624,14 +627,14 @@ looks identical to a dead session.
 
 ## Part 9 — First run
 
-In your Discord server, in the trigger channel:
+In your Discord server, in the main channel:
 
 1. `/status` → should say no toys are linked.
 
 2. She runs `/connect`. She gets an ephemeral QR code (only she can see it).
    In Lovense Remote: **Me → Scan QR code**, scan, confirm.
 
-   Within a few seconds the channel should show *"… connected successfully
+   Within a few seconds the command channel should show *"… connected successfully
    (…)"*. If nothing appears the callback isn't arriving — check
    `journalctl -u lovense-bot -n 50` and `curl https://.../healthz`.
 
@@ -642,7 +645,7 @@ In your Discord server, in the trigger channel:
 
 4. `/buzz intensity:30 seconds:2` — confirms the outbound command path.
 
-5. She runs `/on`. You post in the trigger channel. She should feel a buzz
+5. She runs `/on`. You post in the main channel. She should feel a buzz
    within a second or so. She runs `/off`.
 
 6. Test the safeword: she runs `/on`, then **you** run `/stop`. Everything
