@@ -51,6 +51,8 @@ export function isToyConnected(toy: LovenseToy): boolean {
 
 export class PresenceMonitor {
   private lastKnown = new Map<string, Presence>();
+  /** When each link entered its current state, for "unreachable since". */
+  private changedAt = new Map<string, number>();
   private listeners: PresenceTransitionListener[] = [];
   private timer: NodeJS.Timeout | null = null;
 
@@ -125,6 +127,15 @@ export class PresenceMonitor {
     this.reportedOffline.delete(uid);
     this.results.delete(uid);
     this.lastKnown.delete(uid);
+    this.changedAt.delete(uid);
+  }
+
+  /**
+   * When the link entered its current presence state, or null if it hasn't
+   * changed since startup — the bot can't know how long it was already so.
+   */
+  since(uid: string): number | null {
+    return this.changedAt.get(uid) ?? null;
   }
 
   /**
@@ -227,6 +238,7 @@ export class PresenceMonitor {
     const link = store.getByUid(uid);
     if (!link) {
       this.lastKnown.delete(uid);
+      this.changedAt.delete(uid);
       return;
     }
 
@@ -238,6 +250,7 @@ export class PresenceMonitor {
 
     // First observation after startup isn't a transition worth announcing.
     if (previous === undefined) return;
+    this.changedAt.set(uid, Date.now());
 
     log.info(`Presence for ${uid}: ${previous} -> ${presence}`);
     for (const fn of this.listeners) {

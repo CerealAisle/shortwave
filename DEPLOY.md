@@ -44,7 +44,11 @@ them into `.env` in Part 7.
 
 4. Click **OAuth2** → **URL Generator**.
    - **Scopes:** check `bot` and `applications.commands`
-   - **Bot Permissions:** check `View Channels`, `Send Messages`, `Embed Links`
+   - **Bot Permissions:** check `View Channels`, `Send Messages`, `Embed Links`,
+     `Read Message History` and `Pin Messages`. The last two are for the
+     pinned status post: reading history lets a restart find and edit the
+     existing post rather than adding another. Already invited the bot without
+     them? Grant them to its role in the command channel instead.
    - Copy the **Generated URL** at the bottom.
 
 5. Paste that URL into a browser, pick your private server, **Authorize**.
