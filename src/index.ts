@@ -1,7 +1,8 @@
-import { ChannelType, type Client, type TextChannel } from 'discord.js';
+import { ChannelType, Events, type Client, type TextChannel } from 'discord.js';
 import { config } from './config';
 import { log } from './logger';
 import { createClient } from './discord/client';
+import { StatusBoard } from './discord/status-board';
 import { startCallbackServer } from './http/callback';
 import { LovenseError } from './lovense/client';
 import { sessions } from './session/manager';
@@ -47,6 +48,19 @@ async function dm(client: Client, userId: string, content: string): Promise<void
 async function main() {
   const client = createClient();
 
+  // The pinned post in the command channel: every linked toy, at a glance.
+  const board = new StatusBoard(
+    () =>
+      store.listByGuild(config.DISCORD_GUILD_ID).map((link) => ({
+        link,
+        status: presence.statusFor(link),
+        since: presence.since(link.uid),
+        session: sessions.get(link.guildId, link.discordUserId),
+      })),
+    { get: store.getSetting, set: store.setSetting },
+  );
+  client.once(Events.ClientReady, () => board.start(client));
+
   // Session lifecycle notices. Everything the command channel needs to know about a
   // session ending, pausing or picking back up comes through here.
   // Disconnect DMs are rate limited per person: a phone that flaps between
@@ -62,6 +76,7 @@ async function main() {
   }
 
   sessions.onEvent(({ type, session }) => {
+    board.requestUpdate();
     const who = `<@${session.ownerId}>`;
 
     switch (type) {
@@ -146,6 +161,7 @@ async function main() {
 
   // Liveness (probe results first, heartbeats second) drives suspend/resume rather than a hard stop.
   presence.onTransition(({ link, from, to }) => {
+    board.requestUpdate();
     if (to === 'offline') {
       sessions.suspend(link.guildId, link.discordUserId);
       return;
@@ -158,6 +174,7 @@ async function main() {
 
   const server = await startCallbackServer(({ uid, toys, firstConnect }) => {
     if (!firstConnect) return;
+    board.requestUpdate();
     const link = store.getByUid(uid);
     if (!link) return;
     const names = toys.map((t) => t.nickName || t.name).join(', ') || 'no toys reported';
@@ -174,6 +191,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     log.info(`${signal} received, shutting down`);
     try {
+      board.stop();
       prober.stop();
       presence.stop();
       // Stop every toy before the process goes away.

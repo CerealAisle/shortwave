@@ -116,6 +116,7 @@ src/
     ├── deploy-commands.ts      registers slash commands to the guild
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
+    ├── status-board.ts         pinned live-status post in the command channel
     ├── events/message-create.ts  the trigger path
     └── commands/               one file per slash command
 ```
@@ -220,6 +221,15 @@ disconnects, resumes, errors, connection notices — goes to the command
 channel. Slash commands work in either and reply where they were run, so
 `/stop` and `/status` are usable from the main channel. Commands from any
 other channel are refused.
+
+**The pinned status post.** One message in the command channel shows every
+linked user, their toys, battery, whether each is reachable and when it was
+last probed, and the session state. It is edited in place, at most once every
+15 seconds and only when something changed. Its ID is stored in the
+`settings` table, so a restart edits the same post; if it has been deleted, a
+fresh one is posted and pinned. It needs `Read Message History` and
+`Pin Messages` in that channel — without the latter it still posts, just
+unpinned.
 
 **Per-command permissions.** Discord's own **Server Settings → Integrations →
 Shortwave** can restrict individual commands by channel or member, without

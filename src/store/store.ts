@@ -62,6 +62,13 @@ db.exec(`
     error       TEXT,
     created_at  INTEGER NOT NULL
   );
+
+  -- Small key/value state that must survive a restart, such as the ID of
+  -- the pinned status post.
+  CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Lightweight migration: add columns introduced after the first release.
@@ -116,6 +123,12 @@ const stmts = {
   listByGuild: db.prepare('SELECT * FROM toy_links WHERE guild_id = ?'),
   listAll: db.prepare('SELECT * FROM toy_links'),
   deleteByUid: db.prepare('DELETE FROM toy_links WHERE uid = ?'),
+  getSetting: db.prepare('SELECT value FROM settings WHERE key = ?'),
+  setSetting: db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `),
+  deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
   insertLog: db.prepare(`
     INSERT INTO command_log (uid, description, source, ok, error, created_at)
     VALUES (@uid, @description, @source, @ok, @error, @created_at)
@@ -184,6 +197,19 @@ export const store = {
       error: entry.error ?? null,
       created_at: Date.now(),
     });
+  },
+
+  getSetting(key: string): string | null {
+    const row = stmts.getSetting.get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  },
+
+  setSetting(key: string, value: string): void {
+    stmts.setSetting.run(key, value);
+  },
+
+  deleteSetting(key: string): void {
+    stmts.deleteSetting.run(key);
   },
 
   close(): void {
