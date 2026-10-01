@@ -1,0 +1,46 @@
+Requirements
+
+App Name:
+Shortwave
+
+App Description:
+Discord bot for controlling Lovense toys. Let's users connect their toys, and the app will use the Lovense cloud API to send commands to the toy. Both users can control the toys. The flow should be to connect the toy. Then start a session with the on command. The app should support multiple toys connected, even for the same user.
+
+Users:
+Daddy (CerealAisle) (staging and production)
+Sweetheart (QuietYogurtcloset975) (production only)
+E (elliott_crawford) (staging only)
+
+
+Channels: Bot listens for commands in two channels
+- Main channel: Has both users
+- Command channel: Has Daddy. This way commands can be sent stealthily
+
+Staging Server:
+Shortwave Test Server
+
+Staging Channels: 
+test-channel (channel with both CerealAisle and E)
+test-bot-commands (channel with just CerealAisle)
+
+Production Server:
+GoodGirl
+
+Production Channels:
+sugar-and-spice (channel with both CerealAisle and QuietYogurtcloset975)
+somno (channel with just CerealAisle)
+
+Modes
+- On mode: once a toy is on, the app should actively try to keep the toy online, by sending 0% patterns on a regular interval. In the Lovense app, the longest pattern I can send is 59 mins 59secs, so sending that every 20 mins or so to refresh it would likely prevent issues. Whenever a buzz command, pattern command, or a tease buzz finishes, a new 0% pattern should be sent.
+- Tease mode: buzzes briefly every time I message in the main channel
+- Pattern mode: Sends a pattern. Perhaps from a list of predefined ones
+
+Commands:
+- Connect: Connect a toy
+- Disconnect <toy>: Disconnect a toy
+- Status <user>: Show connected toys, and session status for the user's toys. Default to yourself
+- On <toy>: Start a session with the connected toy. 
+- Off <toy>: Stop a session with the connected toy
+- Pattern <toy> <pattern>: sends a named pattern to the toy for it to play. I think I want patterns to be setup as predifined files or something, with names that can be referenced in the command.
+- Buzz <user> <toy> <intensity> <duration>
+- Tease <user> <toy> <duration> <intensity>: New messages from anyone other than the owner of the toy cause the toy to buzz. 1 sec at 10% power should be the default.
