@@ -649,10 +649,13 @@ In your Discord server, in the main channel:
 
 4. `/buzz intensity:30 seconds:2` — confirms the outbound command path.
 
-5. She runs `/on`. You post in the main channel. She should feel a buzz
+5. She runs `/tease`. You post in the main channel. She should feel a buzz
    within a second or so. She runs `/off`.
 
-6. Test the safeword: she runs `/on`, then **you** run `/stop`. Everything
+6. Test the never-gated rule: **you** run `/tease user:@her`, then **she**
+   runs `/off`. It must turn off even though you started it.
+
+7. Test the safeword: she runs `/tease`, then **you** run `/stop`. Everything
    should halt immediately.
 
 ---
@@ -666,7 +669,7 @@ sudo -u lovensebot sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/lovense-bot/.e
 sudo systemctl restart lovense-bot
 ```
 
-She arms a session with `/on timeout:480` and then uses her phone completely
+She turns tease on with `/tease` and then uses her phone completely
 normally for a few hours. Meanwhile:
 
 ```bash
@@ -720,7 +723,7 @@ sudo -u lovensebot npm run build
 sudo systemctl restart lovense-bot
 ```
 
-A restart always comes back **disarmed**. That's deliberate, not a bug.
+A restart always comes back with tease **off**. That's deliberate, not a bug.
 
 ### Snapshots
 

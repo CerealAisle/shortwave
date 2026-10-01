@@ -8,6 +8,9 @@ import { presence } from './presence';
 import { RateLimiter } from './rate-limiter';
 
 /**
+ * A session is tease mode: while it exists, messages from anyone else in the
+ * main channel buzz the owner's toy.
+ *
  * `armed`     - triggers fire.
  * `suspended` - the toy went offline; triggers are ignored, but the session
  *               is intact and resumes by itself if the toy comes back inside
@@ -16,7 +19,7 @@ import { RateLimiter } from './rate-limiter';
  *
  * The suspended state exists because iOS suspends background apps. Over a
  * multi-hour session a few minutes of silence is normal, and ending the
- * session on the first gap would mean re-running `/on` over and over.
+ * session on the first gap would mean re-running `/tease` over and over.
  */
 export type SessionState = 'armed' | 'suspended';
 
@@ -25,21 +28,24 @@ export interface Session {
   guildId: string;
   /** Discord user who owns the toy. Their own messages never trigger it. */
   ownerId: string;
+  /** Who ran `/tease`. Often not the owner. */
+  startedBy: string;
   state: SessionState;
   intensityPercent: number;
   durationSec: number;
   armedAt: number;
-  expiresAt: number;
   suspendedAt: number | null;
   limiter: RateLimiter;
-  timer: NodeJS.Timeout;
+  /** When the last reminder was due, posted or skipped. Starts at armedAt. */
+  lastReminderAt: number;
+  reminderTimer: NodeJS.Timeout | null;
   graceTimer: NodeJS.Timeout | null;
   triggerCount: number;
   /** Triggers dropped because the toy was offline or the session suspended. */
   missedCount: number;
 }
 
-export type SessionEventType = 'expired' | 'suspended' | 'resumed' | 'grace-expired';
+export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
 
 export type SessionEventListener = (payload: {
   type: SessionEventType;
@@ -49,6 +55,22 @@ export type SessionEventListener = (payload: {
 export type ErrorListener = (payload: { session: Session; error: Error }) => void;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Whether a due reminder should be posted. The one case it is skipped: the
+ * session was already paused when this interval began, so the "paused"
+ * notice has gone out and the whole interval was spent unreachable. One
+ * message about a dead link is enough.
+ */
+export function shouldPostReminder(
+  session: Pick<Session, 'state' | 'suspendedAt' | 'lastReminderAt'>,
+): boolean {
+  return !(
+    session.state === 'suspended' &&
+    session.suspendedAt !== null &&
+    session.suspendedAt <= session.lastReminderAt
+  );
+}
 
 /**
  * Teardown paths send Stop to a toy that is often already gone. Their
@@ -63,8 +85,11 @@ const TEARDOWN_SOURCES = ['suspend', 'disarm', 'shutdown', 'stop-all'];
  * Deliberate design choices:
  *  - Session state lives in memory only. A restart comes back disarmed.
  *    Failing closed is the only safe default here.
- *  - Every session has an expiry timer, so a forgotten session turns itself
- *    off instead of running indefinitely.
+ *  - No expiry. Tease is driven by the other person's messages, so a
+ *    session nobody is paying attention to produces nothing by itself. A
+ *    timeout could only cut a quiet session short. Instead, a reminder posts
+ *    to the command channel every TEASE_REMINDER_MINUTES, so it can't be
+ *    lost track of.
  *  - `sendNow` is the single choke point, so the intensity cap, the rate
  *    limit and the audit log can't be bypassed by a new command.
  */
@@ -115,42 +140,89 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.guildId === guildId);
   }
 
+  /** Start tease. Re-arming replaces the old session rather than stacking on it. */
   arm(params: {
     uid: string;
     guildId: string;
     ownerId: string;
+    startedBy?: string;
     intensityPercent?: number;
     durationSec?: number;
-    timeoutMinutes?: number;
   }): Session {
-    // Re-arming replaces the old session rather than stacking on it.
     this.disarm(params.guildId, params.ownerId, { silent: true });
 
-    const timeoutMs = (params.timeoutMinutes ?? config.SESSION_TIMEOUT_MINUTES) * 60_000;
     const now = Date.now();
 
     const session: Session = {
       uid: params.uid,
       guildId: params.guildId,
       ownerId: params.ownerId,
+      startedBy: params.startedBy ?? params.ownerId,
       state: 'armed',
       intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
       durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,
       armedAt: now,
-      expiresAt: now + timeoutMs,
       suspendedAt: null,
       limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
       triggerCount: 0,
       missedCount: 0,
-      timer: setTimeout(() => this.handleExpiry(params.guildId, params.ownerId), timeoutMs),
+      lastReminderAt: now,
+      reminderTimer: null,
       graceTimer: null,
     };
 
     this.sessions.set(this.key(params.guildId, params.ownerId), session);
+    this.scheduleReminder(session);
+    log.info(`Tease on for ${params.ownerId} (started by ${session.startedBy})`);
+    return session;
+  }
+
+  /**
+   * Change a running tease's strength or length without resetting it: the
+   * buzz count, elapsed time and reminder schedule all carry on.
+   */
+  retune(
+    guildId: string,
+    ownerId: string,
+    params: { intensityPercent?: number; durationSec?: number },
+  ): Session | undefined {
+    const session = this.sessions.get(this.key(guildId, ownerId));
+    if (!session) return undefined;
+    if (params.intensityPercent !== undefined) session.intensityPercent = params.intensityPercent;
+    if (params.durationSec !== undefined) session.durationSec = params.durationSec;
     log.info(
-      `Session armed for ${params.ownerId} (expires in ${Math.round(timeoutMs / 60_000)}m)`,
+      `Tease retuned for ${ownerId}: ${session.intensityPercent}% / ${session.durationSec}s`,
     );
     return session;
+  }
+
+  /**
+   * Each reminder is scheduled from the previous one, not from arm time, so
+   * the interval stays even however long the session runs.
+   */
+  private scheduleReminder(session: Session): void {
+    if (config.TEASE_REMINDER_MINUTES <= 0) return;
+    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
+    const wait = Math.max(0, session.lastReminderAt + intervalMs - Date.now());
+
+    session.reminderTimer = setTimeout(() => {
+      const current = this.sessions.get(this.key(session.guildId, session.ownerId));
+      if (current !== session) return;
+
+      if (shouldPostReminder(session)) this.emit('reminder', session);
+      else log.debug(`Reminder for ${session.ownerId} skipped: paused all interval`);
+
+      session.lastReminderAt = Date.now();
+      this.scheduleReminder(session);
+    }, wait);
+    session.reminderTimer.unref?.();
+  }
+
+  private clearTimers(session: Session): void {
+    if (session.reminderTimer) clearTimeout(session.reminderTimer);
+    if (session.graceTimer) clearTimeout(session.graceTimer);
+    session.reminderTimer = null;
+    session.graceTimer = null;
   }
 
   /**
@@ -218,8 +290,7 @@ export class SessionManager {
     const session = this.sessions.get(this.key(guildId, ownerId));
     if (!session) return undefined;
 
-    clearTimeout(session.timer);
-    if (session.graceTimer) clearTimeout(session.graceTimer);
+    this.clearTimers(session);
     this.sessions.delete(this.key(guildId, ownerId));
 
     if (!opts.silent) {
@@ -237,8 +308,7 @@ export class SessionManager {
   async stopAll(guildId: string): Promise<number> {
     const active = this.listForGuild(guildId);
     for (const s of active) {
-      clearTimeout(s.timer);
-      if (s.graceTimer) clearTimeout(s.graceTimer);
+      this.clearTimers(s);
       this.sessions.delete(this.key(s.guildId, s.ownerId));
     }
 
@@ -421,21 +491,10 @@ export class SessionManager {
     }
   }
 
-  private handleExpiry(guildId: string, ownerId: string): void {
-    const session = this.sessions.get(this.key(guildId, ownerId));
-    if (!session) return;
-    this.disarm(guildId, ownerId, { silent: true });
-    log.info(`Session expired for ${ownerId}`);
-    this.emit('expired', session);
-  }
-
   /** Called on shutdown so nothing is left running on the toy. */
   async shutdown(): Promise<void> {
     const all = [...this.sessions.values()];
-    for (const s of all) {
-      clearTimeout(s.timer);
-      if (s.graceTimer) clearTimeout(s.graceTimer);
-    }
+    for (const s of all) this.clearTimers(s);
     this.sessions.clear();
     await Promise.allSettled(
       all.map((s) => this.sendNow(s.uid, actions.stop(), 'shutdown')),

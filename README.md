@@ -3,9 +3,9 @@
 A private, two-person Discord bot that bridges Discord message events to a
 Lovense toy over Lovense's cloud API — no LAN between the bot and the toy.
 
-**Flow:** `/connect` links a toy by QR code → `/on` arms it → every message
-from the *other* person in the main channel sends a short buzz → `/off`
-disarms.
+**Flow:** `/connect` links a toy by QR code → `/tease` turns tease on → every
+message from the *other* person in the main channel sends a short buzz →
+`/off` turns it off.
 
 **Setting this up? Follow [DEPLOY.md](DEPLOY.md)** — a linear,
 copy-pasteable walkthrough from bare host to working bot. This README is the
@@ -149,16 +149,25 @@ automatically by `npm test`. See [TESTING.md](TESTING.md).
 These are design decisions, not incidental behaviour, and they're worth knowing
 before you change anything:
 
-- **Only the toy's owner can arm or disarm it.** `/on` and `/off` act on the
-  caller's own link. Nobody can arm someone else's toy.
+- **Consent is physical, not a command.** The toy being on and worn is the
+  signal; there is no software gate for it. Either person can start `/tease`
+  on either toy.
+- **Anything that stops is never gated.** Commands that increase stimulation
+  may be restricted; commands that reduce or stop it never are. `/off` always
+  ends tease on the caller's own toy, whoever started it, and has no owner or
+  permission check. `src/session/manager.test.ts` holds this in place.
 - **The owner's own messages never trigger their toy** — that check is in
   `message-create.ts` and is not configurable.
 - **`/stop` works for either person.** It halts every toy in the server and
   disarms every session. It's the safeword, so it deliberately isn't
   owner-restricted and never waits on a confirmation prompt.
-- **Sessions expire.** `SESSION_TIMEOUT_MINUTES` (default 240, i.e. four
-  hours) auto-disarms and posts a note in the command channel. A session left running
-  by accident turns itself off.
+- **Tease has no expiry; it has a reminder.** Tease is driven by the other
+  person's messages, so tease nobody is paying attention to produces nothing
+  by itself, and a timeout could only cut a quiet session short. Instead,
+  every `TEASE_REMINDER_MINUTES` (default 30) a fresh, non-pinging message in
+  the command channel gives the buzz count, strength and whether the toy is
+  reachable. It is skipped if the toy was already paused for the whole
+  interval, since the pause notice said so.
 - **Restarts fail closed.** Armed state is in memory only, never persisted. A
   crash, reboot or `systemctl restart` comes back disarmed.
 - **Shutdown stops the toy.** `SIGTERM` sends a Stop to every armed toy before
@@ -181,9 +190,6 @@ before you change anything:
   that window closes is it disarmed for real. This matters over a multi-hour
   session, where brief network blips are near-certain. Set
   `OFFLINE_GRACE_SEC=0` to disarm on the first blip instead.
-- **A paused session still expires.** The `SESSION_TIMEOUT_MINUTES` timer keeps
-  running while suspended, so pausing can't extend a session past its
-  dead-man's switch.
 - **A 507 from Lovense suspends the session at once.** "Lovense APP is
   offline" is the server stating it has no live connection to the app, which
   is better evidence than heartbeat silence and arrives minutes sooner. It
@@ -191,7 +197,7 @@ before you change anything:
   while its command channel is dead — the iOS-suspend case. A trigger's wake
   retries run first, so it is only reported once every attempt has failed. The
   next callback or successful command clears it and the session resumes.
-- **`/on` refuses to arm an offline toy** rather than arming into the void.
+- **`/tease` refuses an unreachable toy** rather than starting into the void.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
   continuous vibration. Excess triggers are dropped, not queued.
@@ -278,7 +284,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAX_INTENSITY_PERCENT` | `100` | Hard ceiling on every command |
 | `MIN_COMMAND_INTERVAL_MS` | `1500` | Minimum gap between commands |
 | `MAX_COMMANDS_PER_MINUTE` | `25` | Sliding-window cap |
-| `SESSION_TIMEOUT_MINUTES` | `240` | Auto-disarm timer (max 1440) |
+| `TEASE_REMINDER_MINUTES` | `30` | Reminder interval while tease is on; `0` disables. Tease never expires |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
 | `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
 | `PROBE_INTERVAL_SEC` | `300` | `Vibrate:0` liveness probe per toy; `0` disables |
@@ -299,17 +305,21 @@ granularity is really 5% steps.
 
 ## Commands
 
+Every command replies in the channel it was run in.
+
 | Command | Who | What it does |
 |---|---|---|
 | `/connect` | anyone | Ephemeral QR code to link your own toy |
-| `/on [intensity] [duration] [timeout]` | toy owner | Arm: others' messages buzz you (`timeout` in minutes, max 1440) |
-| `/off` | toy owner | Disarm and stop |
-| `/stop` | anyone | Panic: stop all toys, disarm all sessions |
-| `/status` | anyone | Linked toys, battery, armed state, trigger counts |
+| `/tease [user] [intensity] [duration]` | anyone | Tease on: others' messages buzz the toy. No expiry. Re-run while on to change strength or length |
+| `/off` | toy owner | Turn tease off on your toy and stop it. Never gated |
+| `/stop` | anyone | Safeword: stop all toys, turn tease off for everyone. Never gated |
+| `/status` | anyone | Linked toys, battery, tease state, trigger counts |
 | `/buzz <intensity> <seconds> [target]` | anyone | One-off manual vibration |
 | `/disconnect` | toy owner | Delete your link from the bot |
 
 `/connect` replies ephemerally because the QR code is a control credential.
+The pinned status post in the command channel is the ambient view; `/status`
+is the on-demand one.
 
 ---
 
@@ -414,10 +424,10 @@ not, re-invite with the OAuth2 URL.
 **Everything shows `⚪ Unknown` in `/status`.** Heartbeats aren't arriving. The
 bot has had exactly one callback per link (the pairing one) and deliberately
 won't guess at liveness from that. Enable heartbeat in the Lovense developer
-dashboard. To run without liveness tracking, set `HEARTBEAT_TIMEOUT_SEC=0` —
-`/on` will then arm unconditionally.
+dashboard. A successful probe or buzz also establishes presence, so this
+should clear within `PROBE_INTERVAL_SEC` of linking unless probing is off.
 
-**Sessions keep disarming themselves.** The heartbeat interval is longer than
+**Tease keeps pausing or turning itself off.** The heartbeat interval is longer than
 `HEARTBEAT_TIMEOUT_SEC`, so a healthy link looks stale between beats. Raise the
 timeout to roughly three times the dashboard's heartbeat interval. Confirm the
 real rate with:

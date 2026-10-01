@@ -191,7 +191,7 @@ sudo deploy/update.sh --yes          # no confirmation prompt
 sudo deploy/update.sh --ref v1.3.0   # deploy a tag instead of main
 ```
 
-Afterwards the bot is **disarmed** — restarts always are. Run `/on` again.
+Afterwards tease is **off** — restarts always turn it off. Run `/tease` again.
 
 ### Roll back
 
@@ -283,7 +283,7 @@ it the same day, or you will lose it and not notice.
 **Forgetting `deploy-commands`.** The bot restarts fine, the new command
 exists in the code, and Discord simply doesn't show it. Nothing errors.
 
-**Deploying mid-session.** The restart disarms. The script prompts, but
+**Deploying mid-session.** The restart turns tease off. The script prompts, but
 `--yes` skips the prompt, so don't make `--yes` a habit.
 
 **A green CI and a broken bot.** The tests cover pure logic and state

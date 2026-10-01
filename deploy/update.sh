@@ -157,7 +157,7 @@ cat <<EOF
   to     ${TARGET_SHORT}
   health $([[ "$HEALTHY" == true ]] && echo "ok" || echo "NOT CONFIRMED")
 
-The bot restarted, so it is DISARMED. Run /on again when ready.
+The bot restarted, so tease is OFF. Run /tease again when ready.
 
 Roll back with:
   sudo $APP_DIR/deploy/update.sh --ref ${PREVIOUS_SHORT} --yes

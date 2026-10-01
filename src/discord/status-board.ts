@@ -55,8 +55,8 @@ function reachability(row: BoardRow): string {
 }
 
 function sessionLine(session: Session | undefined, now: number): string {
-  if (!session) return 'off';
-  const label = session.state === 'suspended' ? 'paused (toy offline)' : 'armed';
+  if (!session) return 'tease off';
+  const label = session.state === 'suspended' ? 'tease paused (toy offline)' : 'tease on';
   const missed = session.missedCount > 0 ? ` · ${session.missedCount} missed` : '';
   return (
     `${label} at ${session.intensityPercent}% / ${session.durationSec}s · ` +
@@ -89,7 +89,7 @@ export function renderBoardBody(rows: BoardRow[], now = Date.now()): string {
         `**${link.displayName}** · ${userMention(link.discordUserId)}`,
         ...toys.map((t) => `> ${t}`),
         `> ${reachability(row)}`,
-        `> session ${sessionLine(row.session, now)}`,
+        `> ${sessionLine(row.session, now)}`,
       ].join('\n');
     })
     .join('\n\n');

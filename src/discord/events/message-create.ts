@@ -9,7 +9,7 @@ import { sessions } from '../../session/manager';
  *   - right guild, main channel only (the command channel never triggers)
  *   - never our own messages; other bots only if explicitly enabled
  *   - never the toy owner's own messages
- * Whatever survives becomes one buzz per armed session, subject to the
+ * Whatever survives becomes one buzz per toy with tease on, subject to the
  * session's rate limiter.
  */
 export function registerMessageTrigger(client: Client): void {
