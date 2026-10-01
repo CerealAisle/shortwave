@@ -4,20 +4,35 @@ import type { LovenseToy } from '../lovense/types';
 import { store, type ToyLink } from '../store/store';
 
 /**
- * `unknown` is a deliberate third state, not a failure mode.
+ * Presence comes from two sources, strongest first:
  *
- * Lovense only sends repeat callbacks if heartbeats are enabled in the
- * developer dashboard. If they aren't, a link gets exactly one callback (at
- * pairing) and would look permanently stale afterwards. Treating that as
- * "offline" would block `/on` forever with a misleading message, so a link
- * that has only ever produced one callback stays `unknown`: usable, but with
- * a warning attached.
+ *  1. Command results. Every command Lovense answers — a real one or the
+ *     prober's Vibrate:0 — is a direct test of the exact path a buzz takes.
+ *     A 200 means reachable right now; a 507/501/503 means it isn't.
+ *  2. Heartbeat callbacks, the fallback when no recent result exists.
+ *     Passive, up to HEARTBEAT_TIMEOUT_SEC stale, and known to lie: the app
+ *     can keep heartbeating while its command channel is dead.
+ *
+ * `unknown` is a deliberate third state, not a failure mode. With no recent
+ * command result and heartbeats not enabled in the Lovense dashboard, a link
+ * gets exactly one callback (at pairing) and would look permanently stale.
+ * Treating that as "offline" would block `/on` forever with a misleading
+ * message, so it stays `unknown`: usable, but with a warning attached.
  */
 export type Presence = 'online' | 'offline' | 'unknown';
+
+/** What Lovense said the last time the bot sent this link anything. */
+export interface CommandResult {
+  at: number;
+  ok: boolean;
+  /** Lovense error code when !ok; undefined for a transport failure. */
+  code?: number;
+}
 
 export interface PresenceStatus {
   presence: Presence;
   lastSeen: number | null;
+  lastResult: CommandResult | null;
   /** Toys the app currently reports as connected (status 1). */
   connectedToys: LovenseToy[];
   /** True once we've seen enough callbacks to trust the signal. */
@@ -40,13 +55,28 @@ export class PresenceMonitor {
   private timer: NodeJS.Timeout | null = null;
 
   /**
-   * Links the Lovense API has told us are unreachable (error 507), before the
-   * heartbeat timeout would have noticed. Cleared by the next callback.
+   * Links the Lovense API has told us are unreachable (507, or a 501/503 from
+   * the prober), before the heartbeat timeout would have noticed. Cleared by
+   * the next callback or the next successful command.
    */
   private reportedOffline = new Set<string>();
 
+  private results = new Map<string, CommandResult>();
+
+  /** Whether heartbeat-based liveness is on. */
   get enabled(): boolean {
     return config.HEARTBEAT_TIMEOUT_SEC > 0;
+  }
+
+  /**
+   * How long a 200 keeps a link online without another. Two probe intervals,
+   * so one late probe doesn't flap it; without probing, as long as a
+   * heartbeat would count for.
+   */
+  private get resultFreshMs(): number {
+    const sec =
+      config.PROBE_INTERVAL_SEC > 0 ? config.PROBE_INTERVAL_SEC * 2 : config.HEARTBEAT_TIMEOUT_SEC;
+    return sec * 1000;
   }
 
   onTransition(fn: PresenceTransitionListener): void {
@@ -63,11 +93,38 @@ export class PresenceMonitor {
    * Cleared by the next callback, so a cold launch of the app resumes the
    * session by itself.
    */
-  markReportedOffline(uid: string): void {
+  markReportedOffline(uid: string, code = 507): void {
+    this.results.set(uid, { at: Date.now(), ok: false, code });
     if (this.reportedOffline.has(uid)) return;
     this.reportedOffline.add(uid);
-    log.info(`Lovense reported ${uid} offline; marking it so without waiting for heartbeat timeout`);
+    log.info(`Lovense reported ${uid} unreachable (${code}); marking it offline`);
     this.evaluate(uid);
+  }
+
+  /**
+   * Lovense accepted a command for this link. That is proof the whole path
+   * works right now, so it also clears any earlier 507.
+   */
+  noteReachable(uid: string): void {
+    this.results.set(uid, { at: Date.now(), ok: true });
+    this.reportedOffline.delete(uid);
+    this.evaluate(uid);
+  }
+
+  /** Record a failure that says nothing about reachability (e.g. network). */
+  noteInconclusive(uid: string): void {
+    this.results.set(uid, { at: Date.now(), ok: false });
+  }
+
+  lastResult(uid: string): CommandResult | null {
+    return this.results.get(uid) ?? null;
+  }
+
+  /** Drop everything held for a link — it was unlinked. */
+  forget(uid: string): void {
+    this.reportedOffline.delete(uid);
+    this.results.delete(uid);
+    this.lastKnown.delete(uid);
   }
 
   /**
@@ -75,16 +132,31 @@ export class PresenceMonitor {
    * survives a restart: if a heartbeat landed 20 seconds before the process
    * came back up, the link is still online.
    */
-  statusFor(link: ToyLink): PresenceStatus {
+  statusFor(link: ToyLink, now = Date.now()): PresenceStatus {
     const connectedToys = link.toys.filter(isToyConnected);
     // The pairing callback counts as one; anything beyond it is a heartbeat.
     const heartbeatsWorking = link.callbackCount > 1;
+    const lastResult = this.results.get(link.uid) ?? null;
+    const base = { lastSeen: link.lastSeen, lastResult, connectedToys, heartbeatsWorking };
 
     // A 507 from Lovense outranks everything below, including a heartbeat
     // that arrived seconds ago: the app can be sending heartbeats while its
     // command channel is dead, which is exactly the iOS-suspend case.
     if (this.reportedOffline.has(link.uid)) {
-      return { presence: 'offline', lastSeen: link.lastSeen, connectedToys, heartbeatsWorking };
+      return { presence: 'offline', ...base };
+    }
+
+    const heartbeatFresh =
+      this.enabled &&
+      link.lastSeen !== null &&
+      now - link.lastSeen <= config.HEARTBEAT_TIMEOUT_SEC * 1000;
+
+    // A recent 200 is the strongest evidence there is, and outranks heartbeat
+    // silence. The one thing that overrides it is a fresh heartbeat saying
+    // no toy is attached: Lovense accepts commands for the app either way.
+    if (lastResult?.ok && now - lastResult.at <= this.resultFreshMs) {
+      const detached = heartbeatsWorking && heartbeatFresh && connectedToys.length === 0;
+      return { presence: detached ? 'offline' : 'online', ...base };
     }
 
     let presence: Presence;
@@ -94,7 +166,7 @@ export class PresenceMonitor {
     } else if (!heartbeatsWorking) {
       // One callback only — can't distinguish "quiet" from "gone".
       presence = 'unknown';
-    } else if (Date.now() - link.lastSeen > config.HEARTBEAT_TIMEOUT_SEC * 1000) {
+    } else if (!heartbeatFresh) {
       presence = 'offline';
     } else if (connectedToys.length === 0) {
       // The app is talking to us, but no toy is attached to it.
@@ -103,7 +175,7 @@ export class PresenceMonitor {
       presence = 'online';
     }
 
-    return { presence, lastSeen: link.lastSeen, connectedToys, heartbeatsWorking };
+    return { presence, ...base };
   }
 
   statusForUid(uid: string): PresenceStatus | null {
@@ -121,12 +193,15 @@ export class PresenceMonitor {
     this.evaluate(uid);
   }
 
-  /** Poll for links that have gone quiet — no callback arrives to tell us. */
+  /**
+   * Poll for links whose evidence has gone stale — no callback or command
+   * result arrives to tell us.
+   */
   start(): void {
-    if (!this.enabled) {
+    if (!this.enabled && config.PROBE_INTERVAL_SEC === 0) {
       log.warn(
-        'Heartbeat monitoring disabled (HEARTBEAT_TIMEOUT_SEC=0). ' +
-          'Toy liveness will not be tracked.',
+        'Heartbeat monitoring and probing both disabled ' +
+          '(HEARTBEAT_TIMEOUT_SEC=0, PROBE_INTERVAL_SEC=0). Toy liveness will not be tracked.',
       );
       return;
     }

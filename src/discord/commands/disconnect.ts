@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { makeUid } from '../../lovense/client';
 import { sessions } from '../../session/manager';
+import { presence } from '../../session/presence';
 import { store } from '../../store/store';
 import type { BotCommand } from '../types';
 
@@ -22,6 +23,7 @@ export const command: BotCommand = {
 
     sessions.disarm(interaction.guildId, interaction.user.id, { silent: true });
     store.deleteLink(uid);
+    presence.forget(uid);
 
     await interaction.reply({
       content:

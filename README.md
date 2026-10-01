@@ -103,7 +103,8 @@ src/
 │
 ├── session/
 │   ├── rate-limiter.ts         min-interval + sliding per-minute cap
-│   ├── presence.ts             heartbeat liveness, online/offline transitions
+│   ├── presence.ts             liveness from command results + heartbeats
+│   ├── prober.ts               Vibrate:0 probe loop with offline backoff
 │   └── manager.ts              session state machine, dispatch choke point
 │
 ├── http/
@@ -113,6 +114,7 @@ src/
     ├── types.ts                BotCommand interface
     ├── registry.ts             auto-loads ./commands/*.js
     ├── deploy-commands.ts      registers slash commands to the guild
+    ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── events/message-create.ts  the trigger path
     └── commands/               one file per slash command
@@ -160,8 +162,19 @@ before you change anything:
   crash, reboot or `systemctl restart` comes back disarmed.
 - **Shutdown stops the toy.** `SIGTERM` sends a Stop to every armed toy before
   the process exits; systemd's `TimeoutStopSec=20` gives it room to finish.
-- **Losing the toy pauses the session, it doesn't end it.** If heartbeats stop
-  for `HEARTBEAT_TIMEOUT_SEC`, or the app reports no connected toy, the session
+- **Presence is tested, not inferred.** Every `PROBE_INTERVAL_SEC` (default
+  5 min) each linked toy is sent `Vibrate:0` for ~1.1 s — nothing moves — and
+  Lovense's answer is definitive for the exact path a real buzz takes: `200`
+  reachable, `507` app offline, `501`/`503` link or token problem. Any real
+  command's answer counts the same way and postpones the next probe. A probe
+  is never sent while a command is still running on the toy, since it would
+  cut it short. While a toy is unreachable the interval backs off to
+  `PROBE_OFFLINE_INTERVAL_SEC` (15 min), and a heartbeat arriving brings the
+  next probe forward. Heartbeats remain a secondary signal for when there is
+  no recent result.
+- **Losing the toy pauses the session, it doesn't end it.** If a probe or
+  command fails, heartbeats stop for `HEARTBEAT_TIMEOUT_SEC` with no recent
+  successful command, or the app reports no connected toy, the session
   moves to `suspended`: triggers stop firing, but the session survives and
   resumes by itself if the toy returns within `OFFLINE_GRACE_SEC`. Only when
   that window closes is it disarmed for real. This matters over a multi-hour
@@ -174,8 +187,9 @@ before you change anything:
   offline" is the server stating it has no live connection to the app, which
   is better evidence than heartbeat silence and arrives minutes sooner. It
   outranks a recent heartbeat, because the app can keep sending heartbeats
-  while its command channel is dead — the iOS-suspend case. The next callback
-  clears it and the session resumes.
+  while its command channel is dead — the iOS-suspend case. A trigger's wake
+  retries run first, so it is only reported once every attempt has failed. The
+  next callback or successful command clears it and the session resumes.
 - **`/on` refuses to arm an offline toy** rather than arming into the void.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
@@ -256,7 +270,9 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAX_COMMANDS_PER_MINUTE` | `25` | Sliding-window cap |
 | `SESSION_TIMEOUT_MINUTES` | `240` | Auto-disarm timer (max 1440) |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
-| `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links |
+| `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
+| `PROBE_INTERVAL_SEC` | `300` | `Vibrate:0` liveness probe per toy; `0` disables |
+| `PROBE_OFFLINE_INTERVAL_SEC` | `900` | Probe interval while a toy is unreachable |
 | `OFFLINE_GRACE_SEC` | `300` | Pause-before-disarm window; `0` disarms on first blip |
 | `WAKE_RETRY_ATTEMPTS` | `2` | Retries for a 507 from a sleeping iOS app |
 | `WAKE_RETRY_DELAY_MS` | `700` | Base retry delay (grows per attempt) |

@@ -6,6 +6,7 @@ import { startCallbackServer } from './http/callback';
 import { LovenseError } from './lovense/client';
 import { sessions } from './session/manager';
 import { presence } from './session/presence';
+import { prober } from './session/prober';
 import { store } from './store/store';
 
 /**
@@ -143,7 +144,7 @@ async function main() {
     );
   });
 
-  // Heartbeat-driven liveness drives suspend/resume rather than a hard stop.
+  // Liveness (probe results first, heartbeats second) drives suspend/resume rather than a hard stop.
   presence.onTransition(({ link, from, to }) => {
     if (to === 'offline') {
       sessions.suspend(link.guildId, link.discordUserId);
@@ -168,10 +169,12 @@ async function main() {
 
   await client.login(config.DISCORD_TOKEN);
   presence.start();
+  prober.start();
 
   const shutdown = async (signal: string) => {
     log.info(`${signal} received, shutting down`);
     try {
+      prober.stop();
       presence.stop();
       // Stop every toy before the process goes away.
       await sessions.shutdown();

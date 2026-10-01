@@ -45,6 +45,15 @@ const schema = z.object({
   HEARTBEAT_TIMEOUT_SEC: z.coerce.number().min(0).default(300),
   PRESENCE_POLL_SEC: z.coerce.number().min(5).default(15),
 
+  // Active liveness probe, and the primary presence signal. Each linked toy
+  // is sent Vibrate:0 for ~1.1s — nothing moves — and Lovense's answer says
+  // whether a real command would land right now: 200 reachable, 507 app
+  // offline, 501/503 link or token problem. While a toy is unreachable the
+  // interval backs off to PROBE_OFFLINE_INTERVAL_SEC so a dead link doesn't
+  // fill the log. Set PROBE_INTERVAL_SEC to 0 to disable probing.
+  PROBE_INTERVAL_SEC: z.coerce.number().min(0).default(300),
+  PROBE_OFFLINE_INTERVAL_SEC: z.coerce.number().min(0).default(900),
+
   // When a toy goes offline mid-session the session is SUSPENDED, not ended,
   // and resumes by itself if the toy comes back within this window. Only
   // after the window closes is it disarmed for real. Set to 0 to disarm
