@@ -4,7 +4,7 @@ A private, two-person Discord bot that bridges Discord message events to a
 Lovense toy over Lovense's cloud API — no LAN between the bot and the toy.
 
 **Flow:** `/connect` links a toy by QR code → `/on` arms it → every message
-from the *other* person in the trigger channel sends a short buzz → `/off`
+from the *other* person in the main channel sends a short buzz → `/off`
 disarms.
 
 **Setting this up? Follow [DEPLOY.md](DEPLOY.md)** — a linear,
@@ -13,6 +13,7 @@ reference behind it: architecture, configuration, extension points and
 troubleshooting. [WORKFLOW.md](WORKFLOW.md) covers the day-to-day loop — edit,
 test, push, deploy, roll back. [TESTING.md](TESTING.md) covers the test suite,
 and [STAGING.md](STAGING.md) how to run a staging instance beside production.
+[ROADMAP.md](ROADMAP.md) records where it's going and the decisions behind it.
 
 ---
 
@@ -38,6 +39,7 @@ Hosting notes for specific platforms:
 0. [Workflow](WORKFLOW.md) — develop, test, deploy, roll back
 0. [Testing](TESTING.md) — suite, environments, adding tests
 0. [Staging](STAGING.md) — two instances on one host
+0. [Roadmap](ROADMAP.md) — planned changes and decisions
 1. [How it works](#how-it-works)
 2. [Architecture](#architecture)
 3. [Control and fail-safes](#control-and-fail-safes)
@@ -152,7 +154,7 @@ before you change anything:
   disarms every session. It's the safeword, so it deliberately isn't
   owner-restricted and never waits on a confirmation prompt.
 - **Sessions expire.** `SESSION_TIMEOUT_MINUTES` (default 240, i.e. four
-  hours) auto-disarms and posts a note in the channel. A session left running
+  hours) auto-disarms and posts a note in the command channel. A session left running
   by accident turns itself off.
 - **Restarts fail closed.** Armed state is in memory only, never persisted. A
   crash, reboot or `systemctl restart` comes back disarmed.
@@ -198,6 +200,13 @@ you later add keyword triggers you'll need to enable it there *and* add
 `GatewayIntentBits.MessageContent` to the intents list in
 `src/discord/client.ts`.
 
+**Two channels, two jobs.** Messages in the main channel drive the triggers,
+and the bot is close to silent there. Everything the bot says on its own —
+disconnects, resumes, errors, connection notices — goes to the command
+channel. Slash commands work in either and reply where they were run, so
+`/stop` and `/status` are usable from the main channel. Commands from any
+other channel are refused.
+
 **Per-command permissions.** Discord's own **Server Settings → Integrations →
 Shortwave** can restrict individual commands by channel or member, without
 any code change.
@@ -232,7 +241,8 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `DISCORD_TOKEN` | — | Bot token from the Discord portal |
 | `DISCORD_CLIENT_ID` | — | Application ID |
 | `DISCORD_GUILD_ID` | — | Your private server's ID |
-| `TRIGGER_CHANNEL_ID` | — | Only messages here trigger buzzes |
+| `MAIN_CHANNEL_ID` | — | Shared channel; only messages here trigger buzzes |
+| `COMMAND_CHANNEL_ID` | — | Bot's home; all bot-initiated messages go here. Must differ from main |
 | `LOVENSE_TOKEN` | — | Lovense developer token |
 | `USER_TOKEN_SALT` | — | `openssl rand -hex 32`; derives per-user `utoken` |
 | `CALLBACK_PORT` | `4000` | Local port for the webhook server |

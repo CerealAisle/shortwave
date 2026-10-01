@@ -12,7 +12,11 @@ const schema = z.object({
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_CLIENT_ID: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1),
-  TRIGGER_CHANNEL_ID: z.string().min(1),
+  // Two channels, two jobs. Messages in MAIN drive the triggers; everything
+  // the bot says on its own initiative goes to COMMAND. Slash commands are
+  // accepted in both and answer wherever they were run.
+  MAIN_CHANNEL_ID: z.string().min(1),
+  COMMAND_CHANNEL_ID: z.string().min(1),
 
   LOVENSE_TOKEN: z.string().min(1),
   USER_TOKEN_SALT: z.string().min(16, 'must be at least 16 chars'),
@@ -66,6 +70,11 @@ const schema = z.object({
 
   TRIGGER_ON_BOT_MESSAGES: bool,
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+}).refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
+  // One channel doing both jobs would put every bot notice in front of the
+  // person the command channel exists to keep them from.
+  message: 'must differ from MAIN_CHANNEL_ID',
+  path: ['COMMAND_CHANNEL_ID'],
 });
 
 /**

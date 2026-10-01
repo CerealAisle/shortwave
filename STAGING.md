@@ -55,7 +55,7 @@ Follow [DEPLOY.md](DEPLOY.md) Parts 1–2 again, with two differences: name it
 `Shortwave Staging`, and invite it **only to your test server**.
 
 Collect its `DISCORD_TOKEN` and `DISCORD_CLIENT_ID`, plus the test server's
-guild ID and a trigger channel ID from it.
+guild ID and two channel IDs from it (main and command).
 
 ### 2. The staging checkout
 
@@ -84,7 +84,8 @@ What differs from production:
 | `DISCORD_TOKEN` | the **staging** app's token |
 | `DISCORD_CLIENT_ID` | the staging app's ID |
 | `DISCORD_GUILD_ID` | your test server |
-| `TRIGGER_CHANNEL_ID` | a channel in the test server |
+| `MAIN_CHANNEL_ID` | e.g. `test-channel` in the test server |
+| `COMMAND_CHANNEL_ID` | e.g. `test-bot-commands` in the test server |
 | `LOVENSE_TOKEN` | **same as production** — one developer account |
 | `USER_TOKEN_SALT` | a fresh `openssl rand -hex 32` |
 | `CALLBACK_PORT` | `4001` |

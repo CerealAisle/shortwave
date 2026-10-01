@@ -79,7 +79,6 @@ export const command: BotCommand = {
       uid: makeUid(interaction.guildId, interaction.user.id),
       guildId: interaction.guildId,
       ownerId: interaction.user.id,
-      channelId: config.TRIGGER_CHANNEL_ID,
       intensityPercent: intensity,
       durationSec: duration,
       timeoutMinutes: timeout,
@@ -98,7 +97,7 @@ export const command: BotCommand = {
 
     await interaction.reply({
       content:
-        `**Armed.** Messages from anyone else in ${channelMention(config.TRIGGER_CHANNEL_ID)} ` +
+        `**Armed.** Messages from anyone else in ${channelMention(config.MAIN_CHANNEL_ID)} ` +
         `will buzz at ${session.intensityPercent}% for ${session.durationSec}s.\n` +
         `Auto-off in ${expiresIn} minutes. Use \`/off\` to stop, or \`/stop\` for an immediate halt.` +
         heartbeatWarning,
