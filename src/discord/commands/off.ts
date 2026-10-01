@@ -2,10 +2,14 @@ import { SlashCommandBuilder } from 'discord.js';
 import { sessions } from '../../session/manager';
 import type { BotCommand } from '../types';
 
+/**
+ * Never gated: it acts on the caller's own toy whoever started the tease,
+ * and has no owner or permission check. See manager.test.ts.
+ */
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('off')
-    .setDescription('Disarm your toy — messages stop triggering buzzes'),
+    .setDescription('Turn tease off on your toy — messages stop triggering buzzes'),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -13,7 +17,7 @@ export const command: BotCommand = {
     const session = sessions.disarm(interaction.guildId, interaction.user.id);
 
     if (!session) {
-      await interaction.reply({ content: 'You were not armed. Nothing to do.' });
+      await interaction.reply({ content: 'Tease was not on. Nothing to do.' });
       return;
     }
 
@@ -21,7 +25,7 @@ export const command: BotCommand = {
     const missed = session.missedCount > 0 ? `, ${session.missedCount} missed` : '';
     await interaction.reply({
       content:
-        `**Disarmed.** ${session.triggerCount} buzz(es)${missed} over ${minutes} minute(s). ` +
+        `**Tease off.** ${session.triggerCount} buzz(es)${missed} over ${minutes} minute(s). ` +
         'A stop command has been sent.',
     });
   },

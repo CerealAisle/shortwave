@@ -171,7 +171,7 @@ This is the one thing to be disciplined about. Make it the last step of any
 testing session, the same way you'd put a tool back.
 
 The symptom of forgetting: production `/status` shows ⚪ Unknown or a
-heartbeat that keeps getting older, `/on` refuses to arm, and the log fills
+heartbeat that keeps getting older, `/tease` refuses the toy, and the log fills
 with:
 
 ```

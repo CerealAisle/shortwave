@@ -1,4 +1,4 @@
-import { ChannelType, Events, type Client, type TextChannel } from 'discord.js';
+import { ChannelType, Events, time, type Client, type TextChannel } from 'discord.js';
 import { config } from './config';
 import { log } from './logger';
 import { createClient } from './discord/client';
@@ -16,12 +16,19 @@ import { store } from './store/store';
  * running the bot, not for the shared conversation. Command replies don't
  * come through here — they answer wherever the command was run.
  */
-async function notify(client: Client, content: string): Promise<void> {
+async function notify(
+  client: Client,
+  content: string,
+  opts: { ping?: boolean } = {},
+): Promise<void> {
   const channelId = config.COMMAND_CHANNEL_ID;
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel?.type === ChannelType.GuildText) {
-      await (channel as TextChannel).send(content);
+      await (channel as TextChannel).send({
+        content,
+        ...(opts.ping === false ? { allowedMentions: { parse: [] } } : {}),
+      });
     }
   } catch (err) {
     log.warn(`Could not post to ${channelId}: ${(err as Error).message}`);
@@ -80,12 +87,33 @@ async function main() {
     const who = `<@${session.ownerId}>`;
 
     switch (type) {
-      case 'expired': {
-        const hours = ((Date.now() - session.armedAt) / 3_600_000).toFixed(1);
+      case 'reminder': {
+        // A fresh post each time, as a visible heartbeat; the pinned board is
+        // the quiet view. Carries enough state to be worth reading, and
+        // doesn't ping, so it doesn't become a notification to tune out.
+        const status = presence.statusForUid(session.uid);
+        const reach =
+          session.state === 'suspended'
+            ? '⏸️ paused — toy unreachable'
+            : status?.presence === 'online'
+              ? `🟢 reachable${
+                  status.lastResult?.ok
+                    ? `, probed ${time(Math.floor(status.lastResult.at / 1000), 'R')}`
+                    : ''
+                }`
+              : status?.presence === 'offline'
+                ? '🔴 unreachable'
+                : '⚪ reachability unknown';
+        const startedBy =
+          session.startedBy === session.ownerId ? '' : ` by <@${session.startedBy}>`;
         void notify(
           client,
-          `${who}'s session hit its auto-off timer after ${hours}h and has been disarmed. ` +
-            `${session.triggerCount} buzz(es) total.`,
+          `**Tease still on** for ${who} — started ${time(Math.floor(session.armedAt / 1000), 'R')}${startedBy}.
+` +
+            `${session.triggerCount} buzz(es) at ${session.intensityPercent}% / ${session.durationSec}s` +
+            (session.missedCount > 0 ? ` · ${session.missedCount} missed` : '') +
+            ` · ${reach}`,
+          { ping: false },
         );
         break;
       }
@@ -109,7 +137,7 @@ async function main() {
             'swipe the app away). Just reopening it usually is not enough.\n' +
             '2. Open it again and wait for the toy to reconnect.\n\n' +
             `The session resumes on its own if that happens within ${graceMin} minutes. ` +
-            'After that it disarms and you will need `/on` again.',
+            'After that tease turns off and will need `/tease` again.',
         );
         break;
       }
@@ -123,8 +151,8 @@ async function main() {
       case 'grace-expired':
         void notify(
           client,
-          `${who}'s toy did not come back in time — session disarmed. ` +
-            'Reconnect in Lovense Remote, then `/on` again.',
+          `${who}'s toy did not come back in time — tease is off. ` +
+            'Reconnect in Lovense Remote, then `/tease` again.',
         );
         // Deliberately bypasses the cooldown: the session has actually ended
         // now, which is worth interrupting for even if a pause DM just went
@@ -133,9 +161,9 @@ async function main() {
           void dm(
             client,
             session.ownerId,
-            '**Session disarmed** — your toy did not come back within the grace window.\n\n' +
+            '**Tease is off** — your toy did not come back within the grace window.\n\n' +
               'Force-quit and reopen Lovense Remote, check the toy is connected, ' +
-              'then run `/on` to start a new session.',
+              'then run `/tease` to start again.',
           );
         }
         break;
@@ -180,7 +208,7 @@ async function main() {
     const names = toys.map((t) => t.nickName || t.name).join(', ') || 'no toys reported';
     void notify(
       client,
-      `<@${link.discordUserId}> connected successfully (${names}). Use \`/on\` when ready.`,
+      `<@${link.discordUserId}> connected successfully (${names}). Use \`/tease\` when ready.`,
     );
   });
 

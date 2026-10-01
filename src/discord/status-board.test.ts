@@ -48,14 +48,15 @@ function session(over: Partial<Session> = {}): Session {
     uid: 'g:u',
     guildId: 'g',
     ownerId: '111',
+    startedBy: '222',
     state: 'armed',
     intensityPercent: 50,
     durationSec: 1.5,
     armedAt: NOW - (2 * 60 + 14) * 60_000,
-    expiresAt: NOW + 3_600_000,
     suspendedAt: null,
     limiter: new RateLimiter(0, 100),
-    timer: setTimeout(() => {}, 0),
+    lastReminderAt: NOW,
+    reminderTimer: null,
     graceTimer: null,
     triggerCount: 12,
     missedCount: 0,
@@ -69,7 +70,7 @@ describe('renderBoardBody', () => {
     assert.match(body, /\*\*Daddy\*\* · <@111>/);
     assert.match(body, /🟢 Lush 3 · 87%/);
     assert.match(body, /reachable, probed <t:\d+:R>/);
-    assert.match(body, /session off/);
+    assert.match(body, /tease off/);
   });
 
   it('shows how long a toy has been unreachable, and why', () => {
@@ -93,14 +94,14 @@ describe('renderBoardBody', () => {
     }
   });
 
-  it('summarises an armed session with count and elapsed time', () => {
+  it('summarises tease with count and elapsed time', () => {
     const body = renderBoardBody([row({ session: session() })], NOW);
-    assert.match(body, /armed at 50% \/ 1\.5s · 12 buzz\(es\) · 2h 14m/);
+    assert.match(body, /tease on at 50% \/ 1\.5s · 12 buzz\(es\) · 2h 14m/);
   });
 
-  it('marks a paused session as paused', () => {
+  it('marks paused tease as paused', () => {
     const body = renderBoardBody([row({ session: session({ state: 'suspended' }) })], NOW);
-    assert.match(body, /paused/);
+    assert.match(body, /tease paused/);
   });
 
   it('renders the same state to the same string, so unchanged state is not re-edited', () => {

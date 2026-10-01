@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
+import { config } from '../config';
 import { command as off } from '../discord/commands/off';
 import { command as stop } from '../discord/commands/stop';
 import { LovenseError, lovense, makeUid } from '../lovense/client';
 import type { ToyAction } from '../lovense/types';
 import { store } from '../store/store';
-import { sessions } from './manager';
+import { sessions, shouldPostReminder, type Session } from './manager';
 
 /**
  * The rule these guard: commands that increase stimulation may be
@@ -56,6 +57,18 @@ function armWearer() {
 }
 
 describe('the wearer can always stop', () => {
+  it('ends tease someone else started on their toy', async () => {
+    // The case this whole file exists for: /tease user:<wearer> run by the
+    // other person, then /off by the wearer.
+    sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER, startedBy: OTHER });
+    const ended = sessions.disarm(GUILD, WEARER);
+    await flush();
+
+    assert.equal(ended?.startedBy, OTHER);
+    assert.equal(sessions.get(GUILD, WEARER), undefined);
+    assert.equal(stopsTo(WEARER_UID).length, 1);
+  });
+
   it('disarm by the wearer ends their session and sends a Stop', async () => {
     armWearer();
     const ended = sessions.disarm(GUILD, WEARER);
@@ -117,4 +130,81 @@ describe('the stop commands are never gated', () => {
       );
     });
   }
+});
+
+describe('tease', () => {
+  afterEach(() => mock.timers.reset());
+
+  it('has no expiry, and reminds on an even interval instead', () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+    const reminders: Session[] = [];
+    sessions.onEvent(({ type, session }) => {
+      if (type === 'reminder' && session.ownerId === WEARER) reminders.push(session);
+    });
+
+    armWearer();
+    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
+
+    mock.timers.tick(intervalMs - 1);
+    assert.equal(reminders.length, 0, 'no reminder before the first interval');
+
+    mock.timers.tick(1);
+    assert.equal(reminders.length, 1);
+
+    // Eight hours on: still running, and exactly one reminder per interval.
+    // Stepped an interval at a time; one big tick moves the mocked clock to
+    // the end before the callbacks run.
+    const steps = Math.floor((8 * 3_600_000) / intervalMs);
+    for (let i = 0; i < steps; i++) mock.timers.tick(intervalMs);
+    assert.ok(sessions.get(GUILD, WEARER), 'tease must not expire by itself');
+    assert.equal(reminders.length, 1 + steps);
+  });
+
+  it('stops reminding once it is turned off', () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+    let count = 0;
+    sessions.onEvent(({ type, session }) => {
+      if (type === 'reminder' && session.ownerId === WEARER) count++;
+    });
+
+    armWearer();
+    sessions.disarm(GUILD, WEARER);
+    mock.timers.tick(config.TEASE_REMINDER_MINUTES * 60_000 * 3);
+    assert.equal(count, 0);
+  });
+
+  it('retune changes strength without resetting the count', () => {
+    const session = armWearer();
+    session.triggerCount = 7;
+    sessions.retune(GUILD, WEARER, { intensityPercent: 80 });
+
+    const after = sessions.get(GUILD, WEARER)!;
+    assert.equal(after, session);
+    assert.equal(after.intensityPercent, 80);
+    assert.equal(after.durationSec, config.BUZZ_DURATION_SEC);
+    assert.equal(after.triggerCount, 7);
+  });
+});
+
+describe('shouldPostReminder', () => {
+  const T = 1_000_000;
+
+  it('posts while tease is running normally', () => {
+    assert.equal(shouldPostReminder({ state: 'armed', suspendedAt: null, lastReminderAt: T }), true);
+  });
+
+  it('posts when the toy dropped during this interval — that is news', () => {
+    assert.equal(
+      shouldPostReminder({ state: 'suspended', suspendedAt: T + 1, lastReminderAt: T }),
+      true,
+    );
+  });
+
+  it('skips when the toy was already paused for the whole interval', () => {
+    // The "paused" notice already said so. One message about a dead link.
+    assert.equal(
+      shouldPostReminder({ state: 'suspended', suspendedAt: T - 1, lastReminderAt: T }),
+      false,
+    );
+  });
 });

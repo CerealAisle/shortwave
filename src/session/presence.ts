@@ -16,7 +16,7 @@ import { store, type ToyLink } from '../store/store';
  * `unknown` is a deliberate third state, not a failure mode. With no recent
  * command result and heartbeats not enabled in the Lovense dashboard, a link
  * gets exactly one callback (at pairing) and would look permanently stale.
- * Treating that as "offline" would block `/on` forever with a misleading
+ * Treating that as "offline" would block `/tease` forever with a misleading
  * message, so it stays `unknown`: usable, but with a warning attached.
  */
 export type Presence = 'online' | 'offline' | 'unknown';

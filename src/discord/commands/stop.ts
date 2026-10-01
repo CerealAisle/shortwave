@@ -9,7 +9,7 @@ import type { BotCommand } from '../types';
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('stop')
-    .setDescription('Immediately stop all toys and disarm every session'),
+    .setDescription('Immediately stop all toys and turn tease off for everyone'),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -18,8 +18,8 @@ export const command: BotCommand = {
     const count = await sessions.stopAll(interaction.guildId);
 
     await interaction.editReply(
-      `**Stopped.** All toys halted and ${count} session(s) disarmed. ` +
-        'Re-arm with `/on` when you want to continue.',
+      `**Stopped.** All toys halted and tease turned off for ${count} toy(s). ` +
+        'Start again with `/tease` when you want to continue.',
     );
   },
 };

@@ -5,22 +5,25 @@ import { store } from '../../store/store';
 import type { BotCommand } from '../types';
 
 function sessionLine(session: ReturnType<typeof sessions.get>): string {
-  if (!session) return 'Disarmed';
+  if (!session) return 'Tease off';
 
-  const label = session.state === 'suspended' ? '**Paused** (toy offline)' : '**Armed**';
+  const label =
+    session.state === 'suspended' ? '**Tease paused** (toy offline)' : '**Tease on**';
   const missed = session.missedCount > 0 ? ` · ${session.missedCount} missed` : '';
+  const by =
+    session.startedBy === session.ownerId ? '' : ` by ${userMention(session.startedBy)}`;
 
   return (
     `${label} at ${session.intensityPercent}% / ${session.durationSec}s · ` +
     `${session.triggerCount} buzz(es)${missed} · ` +
-    `auto-off ${time(Math.floor(session.expiresAt / 1000), 'R')}`
+    `started ${time(Math.floor(session.armedAt / 1000), 'R')}${by}`
   );
 }
 
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('status')
-    .setDescription('Show linked toys and which sessions are armed'),
+    .setDescription('Show linked toys and whether tease is on'),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
