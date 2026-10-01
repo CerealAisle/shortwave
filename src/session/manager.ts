@@ -51,6 +51,13 @@ export type ErrorListener = (payload: { session: Session; error: Error }) => voi
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Teardown paths send Stop to a toy that is often already gone. Their
+ * failures are expected and must not feed back into presence, or suspending
+ * a session would re-trigger suspension.
+ */
+const TEARDOWN_SOURCES = ['suspend', 'disarm', 'shutdown', 'stop-all'];
+
+/**
  * Owns all sessions and is the only path to the toy.
  *
  * Deliberate design choices:
@@ -63,6 +70,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export class SessionManager {
   private sessions = new Map<string, Session>();
+  /** When whatever was last sent to each uid stops running on the toy. */
+  private runningUntil = new Map<string, number>();
   private eventListeners: SessionEventListener[] = [];
   private errorListeners: ErrorListener[] = [];
 
@@ -303,7 +312,9 @@ export class SessionManager {
 
     for (let attempt = 0; attempt <= config.WAKE_RETRY_ATTEMPTS; attempt++) {
       try {
-        await this.sendNow(uid, action, attempt === 0 ? source : `${source}:retry${attempt}`);
+        await this.sendNow(uid, action, attempt === 0 ? source : `${source}:retry${attempt}`, {
+          deferOfflineReport: true,
+        });
         return;
       } catch (err) {
         lastError = err;
@@ -313,33 +324,95 @@ export class SessionManager {
       }
     }
 
+    // Reported only once every attempt has failed. Reporting the first 507
+    // would suspend the session and send a DM, only for the retry to land a
+    // second later and resume it.
+    if (lastError instanceof LovenseError && lastError.code === 507) {
+      presence.markReportedOffline(uid);
+    }
     throw lastError;
+  }
+
+  /**
+   * Whether something is still running on the toy. The probe's Vibrate:0
+   * would cut it short, so the prober waits until this has passed.
+   */
+  busyUntil(uid: string): number {
+    return this.runningUntil.get(uid) ?? 0;
+  }
+
+  /**
+   * Liveness probe: Vibrate:0, through the same wake retry a real trigger
+   * gets, so a sleeping iOS app that answers the second attempt counts as
+   * reachable rather than raising a false "paused" notice. Only the final
+   * outcome is reported to presence.
+   */
+  async probe(uid: string): Promise<boolean> {
+    try {
+      await this.sendWithWakeRetry(uid, actions.probe(), 'probe');
+      return true;
+    } catch (err) {
+      if (err instanceof LovenseError && err.code !== undefined) {
+        presence.markReportedOffline(uid, err.code);
+      } else {
+        presence.noteInconclusive(uid);
+      }
+      return false;
+    }
   }
 
   /**
    * The one place commands leave the process. Manual commands go through here
    * too, so they get the same logging and error mapping.
    */
-  async sendNow(uid: string, action: ToyAction, source: string): Promise<void> {
+  async sendNow(
+    uid: string,
+    action: ToyAction,
+    source: string,
+    opts: { deferOfflineReport?: boolean } = {},
+  ): Promise<void> {
     const description = describeAction(action);
+    const isProbe = source.startsWith('probe');
+    const previousRunningUntil = this.runningUntil.get(uid);
+
+    // Marked before the request goes out, so a probe can't slip in while
+    // this one is still in flight.
+    if (action.kind === 'function' && action.action === 'Stop') {
+      this.runningUntil.delete(uid);
+    } else {
+      this.runningUntil.set(
+        uid,
+        Math.max(previousRunningUntil ?? 0, Date.now() + action.timeSec * 1000),
+      );
+    }
+
     try {
       await lovense.send(uid, action);
       store.logCommand({ uid, description, source, ok: true });
+      // Any 200 is proof the path works, whatever the command was.
+      presence.noteReachable(uid);
     } catch (err) {
+      // It never reached the toy, so nothing new is running on it.
+      if (previousRunningUntil === undefined) this.runningUntil.delete(uid);
+      else this.runningUntil.set(uid, previousRunningUntil);
+
       const message = err instanceof LovenseError ? err.message : (err as Error).message;
       store.logCommand({ uid, description, source, ok: false, error: message });
-      log.warn(`Lovense command failed (${source}): ${message}`);
+      // A dead link would otherwise log a probe failure every interval; the
+      // presence transition already says it once.
+      (isProbe ? log.debug : log.warn)(`Lovense command failed (${source}): ${message}`);
 
       // 507 means Lovense has no live connection to the app. Tell the
       // presence monitor at once rather than letting every later message
       // fail the same way until the heartbeat timeout expires. The transition
-      // that follows suspends the session, and the next callback resumes it.
-      // Skipped for 'suspend'/'disarm'/'shutdown', which are already
-      // teardown paths and would otherwise re-enter suspension.
+      // that follows suspends the session, and the next callback or
+      // successful command resumes it. The retry path reports after its
+      // last attempt instead.
       if (
         err instanceof LovenseError &&
         err.code === 507 &&
-        !['suspend', 'disarm', 'shutdown', 'stop-all'].includes(source)
+        !opts.deferOfflineReport &&
+        !TEARDOWN_SOURCES.includes(source)
       ) {
         presence.markReportedOffline(uid);
       }

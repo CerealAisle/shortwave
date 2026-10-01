@@ -100,6 +100,16 @@ export function preset(name: PresetName, seconds: number): ToyAction {
   return { kind: 'preset', name, timeSec: normaliseDuration(seconds) };
 }
 
+/**
+ * The liveness probe: vibrate at level 0, so nothing moves, but Lovense still
+ * has to deliver it to the app and says whether it could. It would cut short
+ * anything already running on the toy, so the prober never sends it while a
+ * command is in progress.
+ */
+export function probe(): ToyAction {
+  return { kind: 'function', action: 'Vibrate:0', timeSec: MIN_TIME_SEC };
+}
+
 export function stop(): ToyAction {
   return { kind: 'function', action: 'Stop', timeSec: 0 };
 }
