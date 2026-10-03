@@ -25,6 +25,19 @@ elsewhere produces nothing. Rather than a timeout that can only cut short a
 session that was going fine, the bot posts periodically to the command channel
 while tease is active — `TEASE_REMINDER_MINUTES`, default 30.
 
+**The wearer sees three commands: `/connect`, `/test`, `/stop`.** In
+practice one person controls and the other wears, so everything else is a
+controller command, hidden with Discord's default member permissions.
+`/stop` also holds everything still for a few minutes afterwards
+(`STOP_LOCKOUT_MINUTES`), and a later `/stop` can extend that but never
+shorten it. Supersedes the command surface table at the end of this file.
+
+**One notice per outage.** A backgrounded iOS app produced a paused/resumed
+pair every minute. Only a command that gets through now ends an outage —
+heartbeats no longer do — and nothing more is posted until it does. The
+pinned board carries the detail: the code, what it means, and a
+"backgrounded" diagnosis.
+
 **`/stop` stays.** It was missing from the requirements draft. Halts every toy,
 clears every mode, usable by anyone, no confirmation prompt. It is the
 safeword.

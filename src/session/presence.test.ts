@@ -3,7 +3,7 @@ import { describe, it, beforeEach } from 'node:test';
 import { config } from '../config';
 import type { LovenseToy } from '../lovense/types';
 import type { ToyLink } from '../store/store';
-import { isToyConnected, presence } from './presence';
+import { diagnose, isToyConnected, presence } from './presence';
 
 /**
  * The presence state machine decides whether a session fires, pauses or ends,
@@ -111,20 +111,36 @@ describe('presence 507 handling', () => {
     assert.equal(presence.statusFor(fresh).presence, 'offline');
   });
 
-  it('a new callback clears it, so a cold app launch resumes on its own', () => {
+  it('a heartbeat does not clear it — that is what made sessions flap', () => {
+    // A backgrounded iOS app keeps heartbeating while refusing commands.
+    // Each heartbeat used to clear the 507, resume the session, and the next
+    // buzz failed again: a paused/resumed notice pair every minute or so.
     presence.markReportedOffline('guild:user');
-    assert.equal(presence.statusFor(link()).presence, 'offline');
-
     presence.noteCallback('guild:user');
+    assert.equal(presence.statusFor(link()).presence, 'offline');
+  });
+
+  it('a command that gets through clears it, so a cold app launch recovers', () => {
+    // The prober re-tests soon after a heartbeat; its 200 is what does this.
+    presence.markReportedOffline('guild:user');
+    presence.noteReachable('guild:user');
     assert.equal(presence.statusFor(link()).presence, 'online');
   });
 
   it('cannot leave a link stuck offline forever', () => {
     for (let i = 0; i < 5; i++) {
       presence.markReportedOffline('guild:user');
-      presence.noteCallback('guild:user');
+      presence.noteReachable('guild:user');
     }
     assert.equal(presence.statusFor(link()).presence, 'online');
+  });
+
+  it('tells listeners about every result, so an outage notice can be reset', () => {
+    const seen: boolean[] = [];
+    presence.onResult(({ uid, ok }) => uid === 'guild:user' && seen.push(ok));
+    presence.markReportedOffline('guild:user');
+    presence.noteReachable('guild:user');
+    assert.deepEqual(seen, [false, true]);
   });
 
   it('does not leak across links', () => {
@@ -202,5 +218,38 @@ describe('presence from command results', () => {
     presence.forget('guild:user');
     assert.equal(presence.lastResult('guild:user'), null);
     assert.equal(presence.statusFor(link()).presence, 'online');
+  });
+});
+
+describe('diagnose', () => {
+  const offline = (over: Partial<ReturnType<typeof presence.statusFor>>) => ({
+    presence: 'offline' as const,
+    lastSeen: NOW - 30_000,
+    lastResult: { at: NOW, ok: false, code: 507 },
+    connectedToys: [connectedToy],
+    heartbeatsWorking: true,
+    ...over,
+  });
+
+  it('calls a 507 with fresh heartbeats a backgrounded app', () => {
+    const d = diagnose(offline({}), NOW);
+    assert.equal(d?.backgrounded, true);
+    assert.match(d?.hint ?? '', /Force-quit/);
+  });
+
+  it('calls a 507 with no recent heartbeat a closed app or offline phone', () => {
+    const d = diagnose(offline({ lastSeen: NOW - TIMEOUT_MS - 60_000 }), NOW);
+    assert.equal(d?.backgrounded, false);
+    assert.match(d?.hint ?? '', /closed or the phone is offline/);
+  });
+
+  it('explains other codes without guessing at a fix', () => {
+    const d = diagnose(offline({ lastResult: { at: NOW, ok: false, code: 501 } }), NOW);
+    assert.match(d?.meaning ?? '', /developer token/);
+    assert.equal(d?.hint, null);
+  });
+
+  it('says nothing for a link that is online', () => {
+    assert.equal(diagnose(offline({ presence: 'online' }), NOW), null);
   });
 });

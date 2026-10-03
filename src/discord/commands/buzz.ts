@@ -10,6 +10,7 @@ import {
   respondWithToys,
   toyNames,
 } from '../toy-option';
+import { refuseIfStopped } from '../lockout';
 import type { BotCommand } from '../types';
 
 /**
@@ -25,6 +26,8 @@ import type { BotCommand } from '../types';
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('buzz')
+    // Controller only: hidden from, and refused to, anyone but admins.
+    .setDefaultMemberPermissions(0)
     .setDescription('Vibrate a linked toy at a given strength for a given time')
     .addIntegerOption((o) =>
       o
@@ -55,6 +58,7 @@ export const command: BotCommand = {
 
   async execute(interaction) {
     if (!interaction.guildId) return;
+    if (await refuseIfStopped(interaction)) return;
 
     const target = interaction.options.getUser('target') ?? interaction.user;
     const link = store.getByUser(interaction.guildId, target.id);

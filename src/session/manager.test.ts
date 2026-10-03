@@ -3,10 +3,14 @@ import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { config } from '../config';
 import { command as off } from '../discord/commands/off';
 import { command as stop } from '../discord/commands/stop';
+import { loadCommands } from '../discord/registry';
+import * as actions from '../lovense/actions';
 import { LovenseError, lovense, makeUid } from '../lovense/client';
 import type { ToyAction } from '../lovense/types';
 import { store } from '../store/store';
 import {
+  StopLockoutError,
+  isZeroAction,
   planTriggerSends,
   sessions,
   shouldPostReminder,
@@ -150,17 +154,104 @@ describe('the wearer can always stop', () => {
   });
 });
 
-describe('the stop commands are never gated', () => {
-  for (const cmd of [off, stop]) {
-    it(`/${cmd.data.name} has no owner check and no default permission gate`, () => {
-      assert.ok(!cmd.ownerOnly, 'must not be owner-only');
-      const json = cmd.data.toJSON();
-      assert.ok(
-        json.default_member_permissions === undefined || json.default_member_permissions === null,
-        'must not require a Discord permission',
-      );
-    });
-  }
+describe('who can see which command', () => {
+  // The wearer sees exactly three commands. /stop is the one that matters
+  // here: it must never carry a permission gate, because it is how anyone —
+  // the wearer above all — ends everything. /off is a controller command and
+  // is hidden, which is safe only because /stop covers it.
+  const commands = loadCommands();
+  const isHidden = (name: string) => {
+    const perms = commands.get(name)!.data.toJSON().default_member_permissions;
+    return perms !== undefined && perms !== null;
+  };
+
+  it('/stop has no owner check and no permission gate', () => {
+    assert.ok(!stop.ownerOnly);
+    assert.equal(isHidden('stop'), false);
+  });
+
+  it('everyone sees only /connect, /test and /stop', () => {
+    const visible = [...commands.keys()].filter((name) => !isHidden(name)).sort();
+    assert.deepEqual(visible, ['connect', 'stop', 'test']);
+  });
+
+  it('/off is hidden, but has no runtime owner check of its own', () => {
+    assert.equal(isHidden(off.data.name), true);
+    assert.ok(!off.ownerOnly);
+  });
+});
+
+describe('the /stop lockout', () => {
+  const vibrate = { kind: 'function', action: 'Vibrate:10', timeSec: 2 } as const;
+  const T = 2_000_000_000_000;
+
+  afterEach(() => {
+    mock.timers.reset();
+    store.deleteSetting(`stop_lockout:${GUILD}`);
+    // Drop the cached copy too.
+    (sessions as unknown as { lockouts: Map<string, unknown> }).lockouts.delete(GUILD);
+  });
+
+  it('blocks anything that moves, and sends nothing', async () => {
+    sessions.lockOut(GUILD, 180_000, WEARER);
+    await assert.rejects(sessions.sendNow(WEARER_UID, vibrate, 'test'), StopLockoutError);
+    assert.equal(vibrations().length, 0);
+  });
+
+  it('still lets through Stop and 0% commands, so /test and the probe work', async () => {
+    sessions.lockOut(GUILD, 180_000, WEARER);
+    await sessions.sendNow(WEARER_UID, actions.stop(), 'test');
+    await sessions.sendNow(WEARER_UID, actions.probe(), 'test');
+    assert.equal(sent.length, 2);
+  });
+
+  it('turns tease triggers into misses rather than buzzes', async () => {
+    const { session } = armWearer([LUSH]);
+    sessions.lockOut(GUILD, 180_000, WEARER);
+    assert.equal(await sessions.handleTrigger(session, 'test'), 'stopped');
+    assert.equal(vibrations().length, 0);
+  });
+
+  it('can be extended but never shortened', () => {
+    sessions.lockOut(GUILD, 10 * 60_000, WEARER, T);
+    const after = sessions.lockOut(GUILD, 60_000, OTHER, T);
+    assert.equal(after?.until, T + 10 * 60_000);
+    assert.equal(after?.by, WEARER);
+    assert.equal(sessions.lockOut(GUILD, 20 * 60_000, OTHER, T)?.until, T + 20 * 60_000);
+  });
+
+  it('runs out by itself', () => {
+    sessions.lockOut(GUILD, 60_000, WEARER, T);
+    assert.ok(sessions.lockout(GUILD, T + 59_000));
+    assert.equal(sessions.lockout(GUILD, T + 60_000), null);
+  });
+
+  it('survives a restart', () => {
+    sessions.lockOut(GUILD, 60_000, WEARER, T);
+    (sessions as unknown as { lockouts: Map<string, unknown> }).lockouts.delete(GUILD);
+    assert.equal(sessions.lockout(GUILD, T + 1_000)?.by, WEARER);
+  });
+
+  it('a zero-minute /stop halts but locks nothing out', () => {
+    assert.equal(sessions.lockOut(GUILD, 0, WEARER), null);
+    assert.equal(sessions.lockout(GUILD), null);
+  });
+});
+
+describe('isZeroAction', () => {
+  it('passes Stop and level-0 commands', () => {
+    assert.ok(isZeroAction(actions.stop()));
+    assert.ok(isZeroAction(actions.probe()));
+    assert.ok(isZeroAction({ kind: 'function', action: 'Vibrate:0,Rotate:0', timeSec: 2 }));
+    assert.ok(isZeroAction(actions.pattern([0, 0, 0], 500, 5)));
+  });
+
+  it('blocks anything with movement in it, however small', () => {
+    assert.ok(!isZeroAction(actions.vibrate(1, 2)));
+    assert.ok(!isZeroAction({ kind: 'function', action: 'Vibrate:0,Rotate:3', timeSec: 2 }));
+    assert.ok(!isZeroAction(actions.pattern([0, 5, 0], 500, 5)));
+    assert.ok(!isZeroAction(actions.preset('pulse', 5)));
+  });
 });
 
 describe('tease', () => {

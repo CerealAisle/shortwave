@@ -41,6 +41,11 @@ const schema = z.object({
   // is reachable. Set to 0 to disable.
   TEASE_REMINDER_MINUTES: z.coerce.number().min(0).default(30),
 
+  // After /stop, nothing that moves may start for this long — no buzz,
+  // pattern or tease, from anyone. /stop's `duration` overrides it per use.
+  // 0 means /stop halts everything but locks nothing out.
+  STOP_LOCKOUT_MINUTES: z.coerce.number().min(0).max(120).default(3),
+
   // Liveness. Requires "heartbeat" to be enabled in the Lovense developer
   // dashboard — without it, Lovense Remote only calls back once at pairing
   // time and every link would look stale. Set to 0 to disable the check.

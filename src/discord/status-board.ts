@@ -12,7 +12,7 @@ import { config } from '../config';
 import { log } from '../logger';
 import { toyLabel } from '../lovense/toys';
 import type { Session, ToyTease } from '../session/manager';
-import { isToyConnected, type PresenceStatus } from '../session/presence';
+import { diagnose, isToyConnected, type PresenceStatus } from '../session/presence';
 import type { ToyLink } from '../store/store';
 import { describeTease } from './toy-option';
 
@@ -48,8 +48,14 @@ function reachability(row: BoardRow): string {
     case 'online':
       return result?.ok ? `reachable, probed ${rel(result.at)}` : 'reachable (heartbeat)';
     case 'offline': {
-      const code = result && !result.ok && result.code ? ` (${result.code})` : '';
-      return since ? `unreachable since ${rel(since)}${code}` : `unreachable${code}`;
+      const when = since ? ` since ${rel(since)}` : '';
+      const why = diagnose(status);
+      if (!why) return `unreachable${when} — no check-in from the app`;
+      const code = why.code !== undefined ? ` (${why.code})` : '';
+      return (
+        `unreachable${when} — ${why.meaning}${code}` +
+        (why.hint ? `\n> ⚠️ ${why.hint[0]!.toUpperCase()}${why.hint.slice(1)}` : '')
+      );
     }
     case 'unknown':
       return row.link.lastSeen === null ? 'QR not scanned yet' : 'unknown — not probed yet';
@@ -67,10 +73,15 @@ function teaseText(tease: ToyTease | undefined, session: Session | undefined, no
  * board can tell whether anything actually changed: the header timestamp
  * always would.
  */
-export function renderBoardBody(rows: BoardRow[], now = Date.now()): string {
-  if (rows.length === 0) return '*No toys linked. Run `/connect` to link one.*';
+export function renderBoardBody(
+  rows: BoardRow[],
+  now = Date.now(),
+  banner: string | null = null,
+): string {
+  const top = banner ? `${banner}\n\n` : '';
+  if (rows.length === 0) return `${top}*No toys linked. Run \`/connect\` to link one.*`;
 
-  return rows
+  return top + rows
     .map((row) => {
       const { link, status, session } = row;
       const dot = { online: '🟢', offline: '🔴', unknown: '⚪' }[status.presence];
@@ -128,6 +139,8 @@ export class StatusBoard {
 
   constructor(
     private readonly rows: () => BoardRow[],
+    /** A line above everything else, e.g. an active /stop lockout. */
+    private readonly banner: () => string | null,
     private readonly settings: {
       get(key: string): string | null;
       set(key: string, value: string): void;
@@ -170,7 +183,7 @@ export class StatusBoard {
     this.running = true;
 
     try {
-      const body = renderBoardBody(this.rows());
+      const body = renderBoardBody(this.rows(), Date.now(), this.banner());
       const message = await this.ensureMessage();
       if (!message || body === this.lastBody) return;
 
@@ -214,7 +227,7 @@ export class StatusBoard {
       }
     }
 
-    const body = renderBoardBody(this.rows());
+    const body = renderBoardBody(this.rows(), Date.now(), this.banner());
     const posted = await text.send({ content: renderBoard(body), allowedMentions: { parse: [] } });
     this.settings.set(this.settingKey, posted.id);
     this.message = posted;

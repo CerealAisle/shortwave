@@ -94,7 +94,39 @@ describe('renderBoardBody', () => {
       NOW,
     );
     assert.match(body, /🔴 Lush 3/);
-    assert.match(body, /unreachable since <t:\d+:R> \(507\)/);
+    assert.match(body, /unreachable since <t:\d+:R> — Lovense Remote is not reachable \(507\)/);
+  });
+
+  it('names a backgrounded app: heartbeats arriving but commands refused', () => {
+    // The flapping case. Saying what it is, and what fixes it, is the point.
+    const body = renderBoardBody(
+      [
+        row(
+          {},
+          {
+            presence: 'offline',
+            lastSeen: Date.now() - 30_000,
+            lastResult: { at: Date.now() - 10_000, ok: false, code: 507 },
+          },
+        ),
+      ],
+      NOW,
+    );
+    assert.match(body, /looks backgrounded/i);
+    assert.match(body, /Force-quit Lovense Remote/);
+  });
+
+  it('explains a code that is not about the app', () => {
+    const body = renderBoardBody(
+      [row({}, { presence: 'offline', lastResult: { at: NOW, ok: false, code: 503 } })],
+      NOW,
+    );
+    assert.match(body, /does not know this link — run \/connect again \(503\)/);
+  });
+
+  it('puts a banner, such as a /stop lockout, above everything', () => {
+    const body = renderBoardBody([row()], NOW, '🛑 Stopped');
+    assert.ok(body.startsWith('🛑 Stopped\n\n'));
   });
 
   it('never calls a toy reachable when presence says otherwise', () => {

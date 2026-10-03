@@ -159,12 +159,22 @@ These are design decisions, not incidental behaviour, and they're worth knowing
 before you change anything:
 
 - **Consent is physical, not a command.** The toy being on and worn is the
-  signal; there is no software gate for it. Either person can start `/tease`
-  on either toy.
+  signal; there is no software gate for it.
+- **The wearer sees three commands.** `/connect`, `/test` and `/stop` are
+  visible to everyone. Every other command is a controller command, hidden
+  from — and refused to — anyone without Administrator (see
+  [Commands](#commands)).
 - **Anything that stops is never gated.** Commands that increase stimulation
-  may be restricted; commands that reduce or stop it never are. `/off` always
-  ends tease on the caller's own toy, whoever started it, and has no owner or
-  permission check. `src/session/manager.test.ts` holds this in place.
+  may be restricted; commands that reduce or stop it never are. `/stop` has
+  no owner or permission check and is visible to everyone, so whoever is
+  wearing a toy can always end everything. `src/session/manager.test.ts`
+  holds this in place.
+- **`/stop` holds everything still afterwards.** For `STOP_LOCKOUT_MINUTES`
+  (default 3), or the `duration` given, nothing that moves can start — no
+  buzz, pattern or tease, from anyone. A later `/stop` can extend the lockout
+  but never shorten it. It is enforced in `sendNow`, so no command can get
+  round it, and saved to the database, so a restart can't end it early. 0%
+  commands (`/test`, the probe) still go through.
 - **The owner's own messages never trigger their toy** — that check is in
   `message-create.ts` and is not configurable.
 - **`/stop` works for either person.** It halts every toy in the server and
@@ -204,8 +214,18 @@ before you change anything:
   is better evidence than heartbeat silence and arrives minutes sooner. It
   outranks a recent heartbeat, because the app can keep sending heartbeats
   while its command channel is dead — the iOS-suspend case. A trigger's wake
-  retries run first, so it is only reported once every attempt has failed. The
-  next callback or successful command clears it and the session resumes.
+  retries run first, so it is only reported once every attempt has failed.
+  **Only a command that gets through clears it** — a heartbeat does not. A
+  backgrounded iOS app keeps heartbeating while refusing commands, and
+  letting each heartbeat clear the 507 made sessions flap between paused and
+  resumed every minute. Instead, a heartbeat brings the next probe forward
+  (at most once a minute), and that probe's success is what resumes.
+- **One notice per outage.** When a toy stops responding, a single message in
+  the command channel says why (the code and what it means) and what to do,
+  and the wearer gets one DM. Nothing more is posted — no "resumed", no
+  repeat — until a command succeeds. The pinned status board shows the live
+  state, including a "looks backgrounded" warning when heartbeats are
+  arriving but commands are refused.
 - **`/tease` refuses an unreachable toy** rather than starting into the void.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
@@ -294,6 +314,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAX_INTENSITY_PERCENT` | `100` | Hard ceiling on every command |
 | `MIN_COMMAND_INTERVAL_MS` | `1500` | Minimum gap between commands |
 | `MAX_COMMANDS_PER_MINUTE` | `25` | Sliding-window cap |
+| `STOP_LOCKOUT_MINUTES` | `3` | After `/stop`, how long nothing that moves can start. `/stop duration:` overrides it per use; `0` locks nothing out |
 | `TEASE_REMINDER_MINUTES` | `30` | Reminder interval while tease is on; `0` disables. Tease never expires |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
 | `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
@@ -317,16 +338,34 @@ granularity is really 5% steps.
 
 Every command replies in the channel it was run in.
 
-| Command | Who | What it does |
-|---|---|---|
-| `/connect` | anyone | Ephemeral QR code to link your own toy |
-| `/tease [user] [toy] [intensity] [duration]` | anyone | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length |
-| `/off [toy]` | toy owner | Turn tease off on your toys (or one of them) and stop them. Never gated |
-| `/stop` | anyone | Safeword: stop all toys, turn tease off for everyone. Never gated |
-| `/status` | anyone | Linked toys, battery, tease state, trigger counts |
-| `/buzz <intensity> <seconds> [target] [toy]` | anyone | One-off manual vibration |
-| `/pattern <name> [target] [toy]` | anyone | Play a named pattern from `patterns/`. The name autocompletes |
-| `/disconnect` | toy owner | Delete your link from the bot |
+**Everyone** sees these three, and nothing else:
+
+| Command | What it does |
+|---|---|
+| `/connect` | Ephemeral QR code to link your own toy |
+| `/test [target]` | Sends a 0% command to each connected toy — nothing moves — and posts which are responding, with what any error means. Defaults to yourself |
+| `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`). Never gated. Tells the command channel when run elsewhere |
+
+**The controller** (anyone with Administrator, which includes the server
+owner) also sees:
+
+| Command | What it does |
+|---|---|
+| `/tease [user] [toy] [intensity] [duration]` | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length |
+| `/off [toy]` | Turn tease off on your toys (or one of them) and stop them |
+| `/buzz <intensity> <seconds> [target] [toy]` | One-off manual vibration |
+| `/pattern <name> [target] [toy]` | Play a named pattern from `patterns/`. The name autocompletes |
+| `/status` | Linked toys, battery, tease state, trigger counts |
+| `/disconnect [target]` | Delete a link from the bot. The wearer disconnects from the Lovense app instead |
+
+Controller commands are hidden with Discord's own default permission
+setting, so Discord enforces it: the wearer does not see them in the command
+picker and cannot run them. Two things keep that true:
+
+- **The wearer must not have Administrator** through any of their roles.
+- **Per-person changes go in Discord**, under Server Settings → Integrations
+  → Shortwave, which can show a command to a specific member or role
+  without a code change.
 
 `/connect` replies ephemerally because the QR code is a control credential.
 

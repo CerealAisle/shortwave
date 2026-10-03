@@ -1,40 +1,17 @@
-import { ChannelType, Events, time, type Client, type TextChannel } from 'discord.js';
+import { Events, time, type Client } from 'discord.js';
+import { describeLockout } from './discord/lockout';
+import { notify } from './discord/notify';
 import { config } from './config';
 import { log } from './logger';
 import { createClient } from './discord/client';
 import { StatusBoard } from './discord/status-board';
 import { startCallbackServer } from './http/callback';
-import { LovenseError } from './lovense/client';
+import { LovenseError, explainCode } from './lovense/client';
 import { sessions } from './session/manager';
 import { describeTease } from './discord/toy-option';
-import { presence } from './session/presence';
+import { diagnose, presence } from './session/presence';
 import { prober } from './session/prober';
 import { store } from './store/store';
-
-/**
- * Post a bot-initiated message. These always go to the command channel,
- * never the main one: disconnects, resumes and errors are for the person
- * running the bot, not for the shared conversation. Command replies don't
- * come through here — they answer wherever the command was run.
- */
-async function notify(
-  client: Client,
-  content: string,
-  opts: { ping?: boolean } = {},
-): Promise<void> {
-  const channelId = config.COMMAND_CHANNEL_ID;
-  try {
-    const channel = await client.channels.fetch(channelId);
-    if (channel?.type === ChannelType.GuildText) {
-      await (channel as TextChannel).send({
-        content,
-        ...(opts.ping === false ? { allowedMentions: { parse: [] } } : {}),
-      });
-    }
-  } catch (err) {
-    log.warn(`Could not post to ${channelId}: ${(err as Error).message}`);
-  }
-}
 
 /**
  * DM a user. Best effort: Discord refuses DMs from bots to people who have
@@ -65,16 +42,33 @@ async function main() {
         since: presence.since(link.uid),
         session: sessions.get(link.guildId, link.discordUserId),
       })),
+    () => {
+      const lock = sessions.lockout(config.DISCORD_GUILD_ID);
+      return lock ? `🛑 **${describeLockout(lock)}.**` : null;
+    },
     { get: store.getSetting, set: store.setSetting },
   );
   client.once(Events.ClientReady, () => board.start(client));
 
-  // Session lifecycle notices. Everything the command channel needs to know about a
-  // session ending, pausing or picking back up comes through here.
-  // Disconnect DMs are rate limited per person: a phone that flaps between
-  // online and offline would otherwise generate a notification each time.
-  const lastDisconnectDm = new Map<string, number>();
+  // Outage notices: one per outage, then silence until a command actually
+  // gets through. A backgrounded iOS app can drop and recover every minute
+  // or so, and a notice for each of those was noise. The pinned board shows
+  // the live state, including what the error code means.
+  const outageNotified = new Set<string>();
+  presence.onResult(({ uid, ok }) => {
+    if (ok) outageNotified.delete(uid);
+  });
 
+  /** Runs `post` only for the first notice of an outage. */
+  function oncePerOutage(uid: string, post: () => void): void {
+    if (outageNotified.has(uid)) return;
+    outageNotified.add(uid);
+    post();
+  }
+
+  // The disconnect DM follows the same rule, and keeps its own cooldown on
+  // top so separate outages close together don't each raise a notification.
+  const lastDisconnectDm = new Map<string, number>();
   function dmDisconnect(session: { uid: string; ownerId: string }, content: string): void {
     if (!config.DM_ON_DISCONNECT) return;
     const last = lastDisconnectDm.get(session.uid) ?? 0;
@@ -119,76 +113,65 @@ async function main() {
       }
       case 'suspended': {
         const graceMin = Math.round(config.OFFLINE_GRACE_SEC / 60);
-        void notify(
-          client,
-          `${who}'s toy went quiet — session **paused**, not ended. It resumes by itself ` +
-            `if the toy is back within ${graceMin} minutes.\n` +
-            `*If the Lovense app looks fine but nothing reaches the toy, force-quit and ` +
-            `reopen it — reopening from the background is often not enough.*`,
-        );
-        // The channel message is easy to miss on a phone. A DM raises a push
-        // notification, which is the only reliable way to reach the person
-        // who has to perform the fix by hand.
-        dmDisconnect(
-          session,
-          '**Your toy has gone offline** — the session is paused, not ended.\n\n' +
-            'To fix it:\n' +
-            '1. **Force-quit** Lovense Remote (swipe up from the bottom, then ' +
-            'swipe the app away). Just reopening it usually is not enough.\n' +
-            '2. Open it again and wait for the toy to reconnect.\n\n' +
-            `The session resumes on its own if that happens within ${graceMin} minutes. ` +
-            'After that tease turns off and will need `/tease` again.',
-        );
-        break;
-      }
-      case 'resumed': {
-        // Every teasing toy misses the same messages while paused, so the
-        // largest count is the number of messages, not their sum.
-        const missed = Math.max(0, ...[...session.toys.values()].map((t) => t.missedCount));
-        void notify(
-          client,
-          `${who}'s toy is back — session **resumed**.` +
-            (missed > 0 ? ` ${missed} message(s) missed.` : ''),
-        );
-        break;
-      }
-      case 'grace-expired':
-        void notify(
-          client,
-          `${who}'s toy did not come back in time — tease is off. ` +
-            'Reconnect in Lovense Remote, then `/tease` again.',
-        );
-        // Deliberately bypasses the cooldown: the session has actually ended
-        // now, which is worth interrupting for even if a pause DM just went
-        // out a few minutes ago.
-        if (config.DM_ON_DISCONNECT) {
-          void dm(
+        const status = presence.statusForUid(session.uid);
+        const why = status ? diagnose(status) : null;
+        oncePerOutage(session.uid, () => {
+          void notify(
             client,
-            session.ownerId,
-            '**Tease is off** — your toy did not come back within the grace window.\n\n' +
-              'Force-quit and reopen Lovense Remote, check the toy is connected, ' +
-              'then run `/tease` to start again.',
+            `⚠️ ${who}'s toy isn't responding` +
+              (why ? ` — ${why.meaning}${why.code !== undefined ? ` (${why.code})` : ''}` : '') +
+              '.\n' +
+              (why?.hint ? `${why.hint[0]!.toUpperCase()}${why.hint.slice(1)}.\n` : '') +
+              `Tease is paused and picks up by itself when a command gets through; if that ` +
+              `takes more than ${graceMin} minutes it turns off. No more notices until it's ` +
+              'back — the pinned status shows the live state.',
           );
-        }
+          // The channel message is easy to miss on a phone. A DM raises a
+          // push notification, which is the only reliable way to reach the
+          // person who has to perform the fix by hand.
+          dmDisconnect(
+            session,
+            '**Your toy has stopped responding.**\n\n' +
+              'To fix it:\n' +
+              '1. **Force-quit** Lovense Remote (swipe up from the bottom, then ' +
+              'swipe the app away). Just reopening it usually is not enough.\n' +
+              '2. Open it again and wait for the toy to reconnect.\n\n' +
+              'Run `/test` to check it is working again.',
+          );
+        });
+        break;
+      }
+      case 'resumed':
+        // Deliberately silent: the board shows it, and the outage notice
+        // already said it would pick up by itself.
+        break;
+      case 'grace-expired':
+        // Normally covered by the outage notice, which said this would
+        // happen. Only posts when it is the first word on the outage — with
+        // OFFLINE_GRACE_SEC=0 there is no pause first.
+        oncePerOutage(session.uid, () => {
+          void notify(
+            client,
+            `⚠️ ${who}'s toy stopped responding, so tease has been turned off. ` +
+              'No more notices until it is back — the pinned status shows the live state.',
+          );
+        });
         break;
     }
   });
 
-  // Only surface a command failure once per session rather than per message;
-  // a phone that has gone away would otherwise generate a notice per trigger.
-  const notifiedErrors = new Set<string>();
   sessions.onError(({ session, error }) => {
-    // A 507 already triggers an immediate suspend, and the "paused" notice
-    // that follows says the same thing more usefully. Don't post both.
+    // A 507 already suspends the session, and that notice says it better.
     if (error instanceof LovenseError && error.code === 507) return;
-
-    if (notifiedErrors.has(session.uid)) return;
-    notifiedErrors.add(session.uid);
-    setTimeout(() => notifiedErrors.delete(session.uid), 120_000).unref?.();
-    void notify(
-      client,
-      `Could not reach <@${session.ownerId}>'s toy: ${error.message}`,
-    );
+    oncePerOutage(session.uid, () => {
+      void notify(
+        client,
+        `⚠️ Could not reach <@${session.ownerId}>'s toy — ` +
+          `${error instanceof LovenseError ? explainCode(error.code) : error.message}` +
+          `${error instanceof LovenseError && error.code !== undefined ? ` (${error.code})` : ''}. ` +
+          'No more notices until a command gets through.',
+      );
+    });
   });
 
   // Liveness (probe results first, heartbeats second) drives suspend/resume rather than a hard stop.

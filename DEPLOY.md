@@ -649,14 +649,18 @@ In your Discord server, in the main channel:
 
 4. `/buzz intensity:30 seconds:2` — confirms the outbound command path.
 
-5. She runs `/tease`. You post in the main channel. She should feel a buzz
-   within a second or so. She runs `/off`.
+5. Ask her what she sees when she types `/`. It should be exactly
+   `/connect`, `/test` and `/stop`. If she sees more, one of her roles has
+   Administrator — remove it.
 
-6. Test the never-gated rule: **you** run `/tease user:@her`, then **she**
-   runs `/off`. It must turn off even though you started it.
+6. She runs `/test`. It should say her toy is responding, and nothing moves.
 
-7. Test the safeword: she runs `/tease`, then **you** run `/stop`. Everything
-   should halt immediately.
+7. **You** run `/tease user:@her`. You post in the main channel. She should
+   feel a buzz within a second or so.
+
+8. Test the safeword: with tease on, **she** runs `/stop`. Everything halts,
+   and the command channel tells you she did. Then try `/buzz` — it should
+   refuse until the lockout runs out (3 minutes by default).
 
 ---
 
@@ -669,7 +673,7 @@ sudo -u lovensebot sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/lovense-bot/.e
 sudo systemctl restart lovense-bot
 ```
 
-She turns tease on with `/tease` and then uses her phone completely
+You turn tease on for her with `/tease user:@her`, and she uses her phone completely
 normally for a few hours. Meanwhile:
 
 ```bash

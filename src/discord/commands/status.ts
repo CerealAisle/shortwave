@@ -38,6 +38,8 @@ function teaseText(tease: ToyTease | undefined, session: Session | undefined, pa
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('status')
+    // Controller only: hidden from, and refused to, anyone but admins.
+    .setDefaultMemberPermissions(0)
     .setDescription('Show linked toys and which have tease on'),
 
   async execute(interaction) {

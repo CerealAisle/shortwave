@@ -5,13 +5,21 @@ import { sessions } from './manager';
 import { presence, type CommandResult } from './presence';
 
 /**
+ * After a failure, a heartbeat brings the next probe forward — but never
+ * sooner than this, so an app heartbeating every few seconds while refusing
+ * commands isn't probed at the same rate.
+ */
+export const MIN_RETRY_AFTER_CALLBACK_MS = 60_000;
+
+/**
  * When a link is next due a probe, or null if it never should be.
  *
  *  - Never-scanned links have no app to reach.
  *  - Any command result counts, not just probes: a buzz that got a 200 a
  *    minute ago already answered the question.
  *  - Unreachable links back off to the longer interval, unless a callback
- *    has arrived since — the app re-registered, so check again now.
+ *    has arrived since — the app may be back, so check again soon. A
+ *    heartbeat no longer clears a 507 by itself; this probe is what does.
  *  - Nothing is sent while a command is still running on the toy.
  */
 export function nextProbeAt(input: {
@@ -27,7 +35,9 @@ export function nextProbeAt(input: {
   let due = 0;
   if (lastResult) {
     due = lastResult.at + (lastResult.ok ? onlineIntervalMs : offlineIntervalMs);
-    if (!lastResult.ok && lastSeen > lastResult.at) due = Math.min(due, lastSeen);
+    if (!lastResult.ok && lastSeen > lastResult.at) {
+      due = Math.min(due, Math.max(lastSeen, lastResult.at + MIN_RETRY_AFTER_CALLBACK_MS));
+    }
   }
 
   return Math.max(due, busyUntil);

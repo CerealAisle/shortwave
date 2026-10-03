@@ -23,6 +23,33 @@ const SERVER_ERRORS: Record<number, string> = {
   507: 'The Lovense Remote app is offline',
 };
 
+/**
+ * What a command result means, for people. Shown on the status board, in
+ * /test and in the outage notice, so the numbers never need looking up.
+ */
+export function explainCode(code: number | undefined): string {
+  switch (code) {
+    case 200:
+      return 'reachable';
+    case 400:
+      return 'Lovense rejected the command as invalid (a bot bug)';
+    case 404:
+      return 'Lovense rejected a parameter (a bot bug)';
+    case 501:
+      return 'the developer token is invalid — check LOVENSE_TOKEN';
+    case 502:
+      return 'the developer token is not allowed to use the server API';
+    case 503:
+      return 'Lovense does not know this link — run /connect again';
+    case 507:
+      return 'Lovense Remote is not reachable';
+    case undefined:
+      return 'could not reach the Lovense servers (network)';
+    default:
+      return `Lovense returned an unexpected code`;
+  }
+}
+
 export class LovenseError extends Error {
   constructor(
     message: string,

@@ -32,7 +32,7 @@ export const command: BotCommand = {
             '3. Confirm the connection prompt in the app.',
             '',
             'You stay in control the whole time: pressing **Stop** in the app',
-            'ends the link immediately, and `/off` disarms from here.',
+            'ends the link immediately, and `/stop` halts everything from here.',
             code ? `\nUsing Lovense Remote for PC? Enter code: \`${code}\`` : '',
           ].join('\n'),
         )

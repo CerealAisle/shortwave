@@ -16,6 +16,8 @@ import type { BotCommand } from '../types';
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('off')
+    // Controller only: hidden from, and refused to, anyone but admins.
+    .setDefaultMemberPermissions(0)
     .setDescription('Turn tease off on your toys — messages stop triggering buzzes')
     .addStringOption((o) =>
       o
