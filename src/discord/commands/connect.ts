@@ -3,7 +3,6 @@ import { log } from '../../logger';
 import { LovenseError, lovense, makeUid } from '../../lovense/client';
 import { store } from '../../store/store';
 import { text } from '../../text';
-import { awaitScan } from '../pending-connect';
 import type { BotCommand } from '../types';
 
 export const command: BotCommand = {
@@ -31,8 +30,6 @@ export const command: BotCommand = {
         .setColor(0x5865f2);
 
       await interaction.editReply({ embeds: [embed] });
-      // When the scan lands, this reply is edited to confirm it.
-      awaitScan(uid, interaction);
     } catch (err) {
       const message = err instanceof LovenseError ? err.message : (err as Error).message;
       log.error(`QR generation failed for ${uid}: ${message}`);

@@ -36,6 +36,11 @@ const schema = z.object({
 
   MIN_COMMAND_INTERVAL_MS: z.coerce.number().int().min(0).default(1500),
   MAX_COMMANDS_PER_MINUTE: z.coerce.number().int().min(1).default(25),
+  // Tease has no expiry. Instead, while it is on, a reminder posts to the
+  // command channel this often, carrying the buzz count and whether the toy
+  // is reachable. Set to 0 to disable.
+  TEASE_REMINDER_MINUTES: z.coerce.number().min(0).default(30),
+
   // After /stop, nothing that moves may start for this long — no buzz,
   // pattern or tease, from anyone. /stop's `duration` overrides it per use,
   // and a later /stop replaces it, so `duration:0` lifts it early.

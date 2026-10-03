@@ -116,11 +116,6 @@ export const text = {
     pcCode: (code: string) => `\nUsing Lovense Remote for PC? Enter code: \`${code}\``,
     embedFooter: "This QR code is private — don't share it.",
 
-    /** Replaces the QR code once the scan lands (within 15 minutes). */
-    scanned: (toys: string[]) =>
-      `✅ **Connected.** ${toys.length > 0 ? `Shortwave can see: ${toys.join(', ')}.` : 'No toys reported yet — make sure your toy is connected in Lovense Remote.'}\n` +
-      'Run `/test` any time to check it is responding.',
-
     /** Lovense would not give a QR code. */
     qrFailed: (message: string) =>
       `Couldn't get a QR code: ${message}\n` +
@@ -326,6 +321,44 @@ export const text = {
     hint: (hint: string) => `⚠️ ${cap(hint)}`,
     notScanned: 'QR not scanned yet',
     notChecked: 'not checked yet',
+  },
+
+  // ---------------------------------------------------------------------------
+  // Messages the bot posts on its own, in the command channel
+  // ---------------------------------------------------------------------------
+  channel: {
+    /** A QR code from /connect was scanned. */
+    connected: (user: string, toys: string) =>
+      `${userMention(user)} connected successfully (${toys}). Use \`/tease\` when ready.`,
+    /** In `connected`, when the app reported no toys. */
+    noToysReported: 'no toys reported',
+
+    /**
+     * Tease turned itself off because the toy stayed unreachable past
+     * OFFLINE_GRACE_SEC.
+     */
+    teaseOffAfterOutage: (user: string) =>
+      `⚠️ ${userMention(user)}'s toy stopped responding, so tease has been turned off. ` +
+      'The pinned status shows the live state.',
+
+    /** Every TEASE_REMINDER_MINUTES while tease is on. Doesn't ping. */
+    reminder: (user: string, since: number, reach: string, toys: string[]) =>
+      `**Tease still on** for ${userMention(user)} — since ${rel(since)} · ${reach}\n` + toys.join('\n'),
+    /** One line per toy in the reminder. */
+    reminderToy: (toy: string, detail: string, startedBy: string | null) =>
+      `• ${toy}: ${detail}${startedBy ? ` · started by ${userMention(startedBy)}` : ''}`,
+    /** The reachability part of the reminder. */
+    reminderPaused: '⏸️ paused — toy unreachable',
+    reminderReachable: (checkedAt: number | null) =>
+      `🟢 reachable${checkedAt !== null ? `, checked ${rel(checkedAt)}` : ''}`,
+    reminderUnreachable: '🔴 unreachable',
+    reminderUnknown: '⚪ reachability unknown',
+
+    /** Someone ran /stop somewhere other than the command channel. */
+    stopRun: (user: string, channel: string, people: number, until: number | null, lifted: boolean) =>
+      `🛑 ${userMention(user)} ran \`/stop\` in ${channelMention(channel)}. ` +
+      `All toys halted${people > 0 ? ` and tease turned off for ${people} person(s)` : ''}. ` +
+      (until !== null ? `Locked until ${rel(until)}.` : lifted ? 'Lockout lifted.' : 'No lockout.'),
   },
 
   // ---------------------------------------------------------------------------

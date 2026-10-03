@@ -13,7 +13,7 @@ import { RateLimiter } from './rate-limiter';
  *
  * Two levels, because two things vary at different grains:
  *  - The session (per guild + owner) holds what is true of the phone:
- *    paused or not, the grace window and the rate limit. One
+ *    paused or not, the grace window, the rate limit and the reminder. One
  *    Lovense Remote app carries all of a person's toys, so when it drops,
  *    they all drop together.
  *  - Each ToyTease (per toy within it) holds what can differ between toys:
@@ -55,6 +55,9 @@ export interface Session {
   armedAt: number;
   suspendedAt: number | null;
   limiter: RateLimiter;
+  /** When the last reminder was due, posted or skipped. Starts at armedAt. */
+  lastReminderAt: number;
+  reminderTimer: NodeJS.Timeout | null;
   graceTimer: NodeJS.Timeout | null;
   /** Keyed by toy ID, in the order tease started on them. Never empty. */
   toys: Map<string, ToyTease>;
@@ -76,7 +79,7 @@ export interface ToyRef {
   name: string;
 }
 
-export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired';
+export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
 
 export type SessionEventListener = (payload: {
   type: SessionEventType;
@@ -148,6 +151,22 @@ export function planTriggerSends(
 }
 
 /**
+ * Whether a due reminder should be posted. The one case it is skipped: the
+ * session was already paused when this interval began, so the whole interval
+ * was spent unreachable and the reminder would only repeat what the pinned
+ * board already shows.
+ */
+export function shouldPostReminder(
+  session: Pick<Session, 'state' | 'suspendedAt' | 'lastReminderAt'>,
+): boolean {
+  return !(
+    session.state === 'suspended' &&
+    session.suspendedAt !== null &&
+    session.suspendedAt <= session.lastReminderAt
+  );
+}
+
+/**
  * Teardown paths send Stop to a toy that is often already gone. Their
  * failures are expected and must not feed back into presence, or suspending
  * a session would re-trigger suspension.
@@ -162,9 +181,9 @@ const TEARDOWN_SOURCES = ['suspend', 'disarm', 'shutdown', 'stop-all'];
  *    Failing closed is the only safe default here.
  *  - No expiry. Tease is driven by the other person's messages, so a
  *    session nobody is paying attention to produces nothing by itself. A
- *    timeout could only cut a quiet session short. The pinned status board
- *    shows every toy's tease and how long it has run, so it can't be lost
- *    track of.
+ *    timeout could only cut a quiet session short. Instead, a reminder posts
+ *    to the command channel every TEASE_REMINDER_MINUTES, so it can't be
+ *    lost track of.
  *  - `sendNow` is the single choke point, so the intensity cap, the rate
  *    limit and the audit log can't be bypassed by a new command.
  */
@@ -246,10 +265,13 @@ export class SessionManager {
         armedAt: now,
         suspendedAt: null,
         limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
+        lastReminderAt: now,
+        reminderTimer: null,
         graceTimer: null,
         toys: new Map(),
       };
       this.sessions.set(key, session);
+      this.scheduleReminder(session);
     }
 
     const added: ToyTease[] = [];
@@ -284,8 +306,32 @@ export class SessionManager {
     return { session, added, updated };
   }
 
+  /**
+   * Each reminder is scheduled from the previous one, not from arm time, so
+   * the interval stays even however long the session runs.
+   */
+  private scheduleReminder(session: Session): void {
+    if (config.TEASE_REMINDER_MINUTES <= 0) return;
+    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
+    const wait = Math.max(0, session.lastReminderAt + intervalMs - Date.now());
+
+    session.reminderTimer = setTimeout(() => {
+      const current = this.sessions.get(this.key(session.guildId, session.ownerId));
+      if (current !== session) return;
+
+      if (shouldPostReminder(session)) this.emit('reminder', session);
+      else log.debug(`Reminder for ${session.ownerId} skipped: paused all interval`);
+
+      session.lastReminderAt = Date.now();
+      this.scheduleReminder(session);
+    }, wait);
+    session.reminderTimer.unref?.();
+  }
+
   private clearTimers(session: Session): void {
+    if (session.reminderTimer) clearTimeout(session.reminderTimer);
     if (session.graceTimer) clearTimeout(session.graceTimer);
+    session.reminderTimer = null;
     session.graceTimer = null;
   }
 
@@ -331,7 +377,9 @@ export class SessionManager {
     const session = this.sessions.get(this.key(guildId, ownerId));
     if (!session || session.state !== 'suspended') return undefined;
 
+    if (session.reminderTimer) clearTimeout(session.reminderTimer);
     if (session.graceTimer) clearTimeout(session.graceTimer);
+    session.reminderTimer = null;
     session.graceTimer = null;
     session.state = 'armed';
     session.suspendedAt = null;

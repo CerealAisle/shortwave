@@ -2,6 +2,7 @@ import { SlashCommandBuilder } from 'discord.js';
 import { config } from '../../config';
 import { sessions } from '../../session/manager';
 import { text } from '../../text';
+import { notify } from '../notify';
 import type { BotCommand } from '../types';
 
 /**
@@ -32,7 +33,7 @@ export const command: BotCommand = {
 
     const minutes = interaction.options.getNumber('duration') ?? config.STOP_LOCKOUT_MINUTES;
     const wasLocked = sessions.lockout(interaction.guildId) !== null;
-    await sessions.stopAll(interaction.guildId);
+    const count = await sessions.stopAll(interaction.guildId);
     const lock = sessions.lockOut(interaction.guildId, minutes * 60_000, interaction.user.id);
 
     await interaction.editReply(
@@ -42,5 +43,20 @@ export const command: BotCommand = {
           ? text.stop.stoppedAndLifted
           : text.stop.stoppedNoLock,
     );
+
+    // Whoever runs the bot needs to know, even if they're only watching the
+    // command channel.
+    if (interaction.channelId !== config.COMMAND_CHANNEL_ID) {
+      void notify(
+        interaction.client,
+        text.channel.stopRun(
+          interaction.user.id,
+          interaction.channelId,
+          count,
+          lock?.until ?? null,
+          wasLocked && !lock,
+        ),
+      );
+    }
   },
 };

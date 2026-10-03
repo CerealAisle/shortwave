@@ -638,7 +638,8 @@ In your Discord server, in the main channel:
 2. She runs `/connect`. She gets an ephemeral QR code (only she can see it).
    In Lovense Remote: **Me → Scan QR code**, scan, confirm.
 
-   Within a few seconds her private QR reply should change to *"✅ Connected"*. If nothing appears the callback isn't arriving — check
+   Within a few seconds the command channel should show *"… connected successfully
+   (…)"*. If nothing appears the callback isn't arriving — check
    `journalctl -u lovense-bot -n 50` and `curl https://.../healthz`.
 
 3. `/status` again, then once more after 2–3 minutes. The presence line should
@@ -658,7 +659,7 @@ In your Discord server, in the main channel:
    feel a buzz within a second or so.
 
 8. Test the safeword: with tease on, **she** runs `/stop`. Everything halts,
-   and the pinned status board shows a 🛑 banner naming her. Then try `/buzz` —
+   and the command channel tells you she did. Then try `/buzz` —
    it should refuse. `/stop duration:0` lifts the lockout once you've agreed to.
 
 ---

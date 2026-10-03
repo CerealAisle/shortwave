@@ -19,11 +19,11 @@ person wearing the toy, unconditionally, whoever started something and whoever
 is controlling it. The rule: *commands that increase stimulation may be
 restricted; commands that reduce or stop it never are.*
 
-**Tease has no expiry.** The trigger for tease is CerealAisle's own
-messaging, so a session left on while attention moves elsewhere produces
-nothing. Rather than a timeout that can only cut short a session that was
-going fine, the pinned board shows how long each toy's tease has run. (A
-periodic reminder post did this at first; it was removed as noise.)
+**Tease has no expiry; it has a reminder.** The trigger for tease is
+CerealAisle's own messaging, so a session left on while attention moves
+elsewhere produces nothing. Rather than a timeout that can only cut short a
+session that was going fine, the bot posts periodically to the command channel
+while tease is active — `TEASE_REMINDER_MINUTES`, default 30.
 
 **The wearer sees three commands: `/connect`, `/test`, `/stop`.** In
 practice one person controls and the other wears, so everything else is a
@@ -34,12 +34,13 @@ it — always by agreement, which is theirs to keep, not the bot's. `/off` is
 gone: `/tease off:True` turns tease off. Supersedes the command surface table
 at the end of this file.
 
-**The bot never posts on its own.** A backgrounded iOS app produced a
+**Outages are shown, not posted.** A backgrounded iOS app produced a
 paused/resumed pair every minute. Only a command that gets through now ends
-an outage — heartbeats no longer do — and every outage, pause and error is
+an outage — heartbeats no longer do — and outages, pauses and errors are
 shown on the pinned board instead of posted: the code, what it means, and a
-"backgrounded" diagnosis. Everything else the bot says is a reply to a
-command. All of that wording lives in `src/text.ts`.
+"backgrounded" diagnosis. The bot still posts four things itself: a new
+connection, the tease reminder, tease turning off after a long outage, and
+`/stop` run elsewhere. All of the wording lives in `src/text.ts`.
 
 **`/stop` stays.** It was missing from the requirements draft. Halts every toy,
 clears every mode, usable by anyone, no confirmation prompt. It is the
@@ -54,8 +55,9 @@ safeword.
 
 Two rules follow, and they cover every case:
 
-- **The bot initiates nothing.** Its only standing presence is the pinned
-  board in the command channel. She never sees it in the shared channel.
+- **Bot-initiated messages go to the command channel.** New connections,
+  tease reminders, tease turning off, `/stop` notices, and the pinned board.
+  She never sees them in the shared channel.
 - **Command replies go wherever the command was issued.** So `/status` run in
   the main channel answers in the main channel. This is what makes `/stop` and
   `/disconnect` usable by her — she only has the main channel, and she must

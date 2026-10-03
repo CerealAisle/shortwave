@@ -1,6 +1,7 @@
 import { Events } from 'discord.js';
 import { text } from './text';
-import { confirmScan } from './discord/pending-connect';
+import { notify } from './discord/notify';
+import { describeTease } from './discord/toy-option';
 
 import { config } from './config';
 import { log } from './logger';
@@ -33,11 +34,42 @@ async function main() {
   );
   client.once(Events.ClientReady, () => board.start(client));
 
-  // The bot posts nothing on its own. Everything it has to say is either
-  // the answer to a command, or on the pinned board — which these keep
-  // current. Outages, pauses and errors used to post a notice each, and an
-  // iOS app dropping in and out made that a steady stream.
-  sessions.onEvent(() => board.requestUpdate());
+  // Outages, pauses, recoveries and errors are shown on the pinned board, not
+  // posted: an iOS app dropping in and out made those a steady stream. The
+  // bot still posts a few things to the command channel: tease turning
+  // itself off, the tease reminder, a new connection, and /stop (stop.ts).
+  sessions.onEvent(({ type, session }) => {
+    board.requestUpdate();
+
+    if (type === 'grace-expired') {
+      void notify(client, text.channel.teaseOffAfterOutage(session.ownerId));
+    }
+
+    if (type === 'reminder') {
+      // A fresh post each time, as a visible heartbeat; the pinned board is
+      // the quiet view. Doesn't ping, so it doesn't become a notification
+      // to tune out.
+      const status = presence.statusForUid(session.uid);
+      const reach =
+        session.state === 'suspended'
+          ? text.channel.reminderPaused
+          : status?.presence === 'online'
+            ? text.channel.reminderReachable(status.lastResult?.ok ? status.lastResult.at : null)
+            : status?.presence === 'offline'
+              ? text.channel.reminderUnreachable
+              : text.channel.reminderUnknown;
+      const toys = [...session.toys.values()].map((t) =>
+        text.channel.reminderToy(
+          t.toyName,
+          describeTease(t),
+          t.startedBy === session.ownerId ? null : t.startedBy,
+        ),
+      );
+      void notify(client, text.channel.reminder(session.ownerId, session.armedAt, reach, toys), {
+        ping: false,
+      });
+    }
+  });
   sessions.onError(() => board.requestUpdate());
   presence.onResult(() => board.requestUpdate());
 
@@ -56,9 +88,12 @@ async function main() {
 
   const server = await startCallbackServer(({ uid, toys, firstConnect }) => {
     board.requestUpdate();
-    // The first callback is the QR scan landing: answer the /connect that
-    // produced it, by editing its private reply.
-    if (firstConnect) void confirmScan(uid, text.connect.scanned(toys.map(toyLabel)));
+    if (!firstConnect) return;
+    // The first callback is the QR scan landing.
+    const link = store.getByUid(uid);
+    if (!link) return;
+    const names = toys.map(toyLabel).join(', ') || text.channel.noToysReported;
+    void notify(client, text.channel.connected(link.discordUserId, names));
   });
 
   await client.login(config.DISCORD_TOKEN);

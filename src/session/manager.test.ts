@@ -13,6 +13,8 @@ import {
   isZeroAction,
   planTriggerSends,
   sessions,
+  shouldPostReminder,
+  type Session,
   type ToyTease,
 } from './manager';
 
@@ -276,16 +278,42 @@ describe('isZeroAction', () => {
 describe('tease', () => {
   afterEach(() => mock.timers.reset());
 
-  it('has no expiry, and emits nothing while it runs', () => {
-    // The pinned board is the ambient view; the bot posts nothing on its own.
+  it('has no expiry, and reminds on an even interval instead', () => {
     mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-    let events = 0;
-    sessions.onEvent(({ session }) => session.ownerId === WEARER && events++);
+    const reminders: Session[] = [];
+    sessions.onEvent(({ type, session }) => {
+      if (type === 'reminder' && session.ownerId === WEARER) reminders.push(session);
+    });
 
     armWearer();
-    for (let i = 0; i < 16; i++) mock.timers.tick(30 * 60_000);
+    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
+
+    mock.timers.tick(intervalMs - 1);
+    assert.equal(reminders.length, 0, 'no reminder before the first interval');
+
+    mock.timers.tick(1);
+    assert.equal(reminders.length, 1);
+
+    // Eight hours on: still running, and exactly one reminder per interval.
+    // Stepped an interval at a time; one big tick moves the mocked clock to
+    // the end before the callbacks run.
+    const steps = Math.floor((8 * 3_600_000) / intervalMs);
+    for (let i = 0; i < steps; i++) mock.timers.tick(intervalMs);
     assert.ok(sessions.get(GUILD, WEARER), 'tease must not expire by itself');
-    assert.equal(events, 0);
+    assert.equal(reminders.length, 1 + steps);
+  });
+
+  it('stops reminding once it is turned off', () => {
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
+    let count = 0;
+    sessions.onEvent(({ type, session }) => {
+      if (type === 'reminder' && session.ownerId === WEARER) count++;
+    });
+
+    armWearer();
+    sessions.disarm(GUILD, WEARER);
+    mock.timers.tick(config.TEASE_REMINDER_MINUTES * 60_000 * 3);
+    assert.equal(count, 0);
   });
 
   it('running it again retunes a toy without resetting its count', () => {
@@ -308,6 +336,29 @@ describe('tease', () => {
     assert.deepEqual(added.map((t) => t.toyId), [HUSH.id]);
     assert.equal(session.toys.get(LUSH.id)!.intensityPercent, 30);
     assert.equal(session.toys.get(HUSH.id)!.intensityPercent, 90);
+  });
+});
+
+describe('shouldPostReminder', () => {
+  const T = 1_000_000;
+
+  it('posts while tease is running normally', () => {
+    assert.equal(shouldPostReminder({ state: 'armed', suspendedAt: null, lastReminderAt: T }), true);
+  });
+
+  it('posts when the toy dropped during this interval — that is news', () => {
+    assert.equal(
+      shouldPostReminder({ state: 'suspended', suspendedAt: T + 1, lastReminderAt: T }),
+      true,
+    );
+  });
+
+  it('skips when the toy was already paused for the whole interval', () => {
+    // The "paused" notice already said so. One message about a dead link.
+    assert.equal(
+      shouldPostReminder({ state: 'suspended', suspendedAt: T - 1, lastReminderAt: T }),
+      false,
+    );
   });
 });
 

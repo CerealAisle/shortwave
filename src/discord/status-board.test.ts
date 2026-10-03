@@ -66,6 +66,8 @@ function session(over: Partial<Session> = {}, teases: ToyTease[] = [tease()]): S
     armedAt: NOW - (2 * 60 + 14) * 60_000,
     suspendedAt: null,
     limiter: new RateLimiter(0, 100),
+    lastReminderAt: NOW,
+    reminderTimer: null,
     graceTimer: null,
     toys: new Map(teases.map((t) => [t.toyId, t])),
     ...over,

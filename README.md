@@ -120,7 +120,7 @@ src/
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── status-board.ts         pinned live-status post in the command channel
-    ├── pending-connect.ts      confirms a QR scan by editing the /connect reply
+    ├── notify.ts               posts to the command channel
     ├── failure.ts              a failed send, as a reply
     ├── dm.ts                   the one DM: fix-it steps after a failed /test
     ├── toy-option.ts           the shared `toy` option and its autocomplete
@@ -185,10 +185,13 @@ before you change anything:
 - **`/stop` works for either person.** It halts every toy in the server and
   disarms every session. It's the safeword, so it deliberately isn't
   owner-restricted and never waits on a confirmation prompt.
-- **Tease has no expiry.** Tease is driven by the other person's messages,
-  so tease nobody is paying attention to produces nothing by itself, and a
-  timeout could only cut a quiet session short. The pinned status board shows
-  every toy's tease and how long it has run, so it can't be lost track of.
+- **Tease has no expiry; it has a reminder.** Tease is driven by the other
+  person's messages, so tease nobody is paying attention to produces nothing
+  by itself, and a timeout could only cut a quiet session short. Instead,
+  every `TEASE_REMINDER_MINUTES` (default 30) a fresh, non-pinging message in
+  the command channel gives the buzz count, strength and whether the toy is
+  reachable. It is skipped if the toy was already paused for the whole
+  interval.
 - **Restarts fail closed.** Armed state is in memory only, never persisted. A
   crash, reboot or `systemctl restart` comes back disarmed.
 - **Shutdown stops the toy.** `SIGTERM` sends a Stop to every armed toy before
@@ -222,11 +225,12 @@ before you change anything:
   letting each heartbeat clear the 507 made sessions flap between paused and
   resumed every minute. Instead, a heartbeat brings the next probe forward
   (at most once a minute), and that probe's success is what resumes.
-- **The bot never posts on its own.** Everything it says is either the reply
-  to a command or on the pinned status board. Outages, pauses, recoveries and
-  errors all appear on the board: the code, what it means, and a "looks
-  backgrounded" warning when the app is checking in but refusing commands.
-  Even the QR scan is confirmed by editing the private `/connect` reply.
+- **Outages and errors are shown, not posted.** Pauses, recoveries and
+  failed commands appear on the pinned status board: the code, what it
+  means, and a "looks backgrounded" warning when the app is checking in but
+  refusing commands. The bot posts only four things to the command channel
+  on its own: a new connection, the tease reminder, tease turning itself off
+  after a long outage, and someone running `/stop` elsewhere.
 - **One kind of DM.** When `/test` finds a toy not responding for a reason
   its owner can fix, they get a DM with the steps for that failure —
   force-quit a backgrounded app, open a closed one, reconnect Bluetooth,
@@ -320,6 +324,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAX_INTENSITY_PERCENT` | `100` | Hard ceiling on every command |
 | `MIN_COMMAND_INTERVAL_MS` | `1500` | Minimum gap between commands |
 | `MAX_COMMANDS_PER_MINUTE` | `25` | Sliding-window cap |
+| `TEASE_REMINDER_MINUTES` | `30` | Reminder interval while tease is on; `0` disables. Tease never expires |
 | `STOP_LOCKOUT_MINUTES` | `30` | After `/stop`, how long nothing that moves can start. `/stop duration:` overrides it per use; a later `/stop` replaces it, and `duration:0` lifts it |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
 | `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
@@ -352,7 +357,7 @@ checks that descriptions still fit Discord's limits.
 |---|---|
 | `/connect` | Ephemeral QR code to link your own toy |
 | `/test [target]` | Sends a 0% command to each connected toy — nothing moves — and posts which are responding, with what any error means. If one isn't, DMs its owner how to fix it. Defaults to yourself |
-| `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`, 30). A later `/stop` replaces the timer; `duration:0` lifts it. Never gated |
+| `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`, 30). A later `/stop` replaces the timer; `duration:0` lifts it. Never gated. Tells the command channel when run elsewhere |
 
 **The controller** (anyone with Administrator, which includes the server
 owner) also sees:
