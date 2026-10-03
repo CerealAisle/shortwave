@@ -1,0 +1,6 @@
+{
+  "description": "Double thump, rest, repeat",
+  "intervalMs": 200,
+  "steps": [70, 0, 50, 0, 0, 0, 0, 0],
+  "durationSec": 30
+}

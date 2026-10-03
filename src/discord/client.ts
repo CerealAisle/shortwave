@@ -28,6 +28,23 @@ export function createClient(): Client {
   });
 
   client.on(Events.InteractionCreate, async (interaction: Interaction) => {
+    if (interaction.isAutocomplete()) {
+      // Suggestions only. Nothing runs, so the channel check waits for the
+      // real command; an empty list is the quiet answer elsewhere.
+      const command = commands.get(interaction.commandName);
+      if (interaction.guildId !== config.DISCORD_GUILD_ID || !command?.autocomplete) {
+        await interaction.respond([]).catch(() => {});
+        return;
+      }
+      try {
+        await command.autocomplete(interaction);
+      } catch (err) {
+        log.warn(`/${interaction.commandName} autocomplete threw: ${(err as Error).message}`);
+        await interaction.respond([]).catch(() => {});
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.guildId !== config.DISCORD_GUILD_ID) {

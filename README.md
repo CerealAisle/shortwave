@@ -96,6 +96,7 @@ src/
 ├── lovense/
 │   ├── types.ts                ToyAction union + API payload types
 │   ├── actions.ts              action builders; percent→level conversion
+│   ├── patterns.ts             loads and validates patterns/*.json
 │   └── client.ts               HTTP transport, uid/utoken derivation, errors
 │
 ├── store/
@@ -135,6 +136,12 @@ The extension points that matter:
 - **`discord/commands/`** is scanned at boot. Drop in a file exporting
   `{ data, execute }`, re-run `npm run deploy-commands`, restart. No registry
   edits.
+
+**Patterns** are JSON files in `patterns/`, one per pattern, named by
+filename. Copy `patterns/_template.json`; the format is in
+[patterns/README.md](patterns/README.md). `npm test` validates every file
+there, and the bot reads the folder each time `/pattern` runs, so a new
+pattern needs a deploy but no restart or `deploy-commands`.
 
 `commands/buzz.ts` is deliberately written as the reference implementation of
 "vibrate at X% for X seconds" — copy it when adding more.
@@ -279,6 +286,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `CALLBACK_PATH` | `/lovense/callback` | Must match the Lovense dashboard |
 | `CALLBACK_BIND` | `127.0.0.1` | Leave as-is when using a tunnel |
 | `DATABASE_PATH` | `./data/bot.db` | SQLite file |
+| `PATTERNS_DIR` | `./patterns` | One JSON file per `/pattern`; read on each use, no restart needed |
 | `BUZZ_INTENSITY_PERCENT` | `50` | Default per-message strength |
 | `BUZZ_DURATION_SEC` | `1.5` | Lovense requires > 1 s; shorter values are floored |
 | `MAX_INTENSITY_PERCENT` | `100` | Hard ceiling on every command |
@@ -315,6 +323,7 @@ Every command replies in the channel it was run in.
 | `/stop` | anyone | Safeword: stop all toys, turn tease off for everyone. Never gated |
 | `/status` | anyone | Linked toys, battery, tease state, trigger counts |
 | `/buzz <intensity> <seconds> [target]` | anyone | One-off manual vibration |
+| `/pattern <name> [target]` | anyone | Play a named pattern from `patterns/`. The name autocompletes |
 | `/disconnect` | toy owner | Delete your link from the bot |
 
 `/connect` replies ephemerally because the QR code is a control credential.

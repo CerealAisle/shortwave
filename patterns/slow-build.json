@@ -1,0 +1,6 @@
+{
+  "description": "Gentle climb to full strength, then drops away",
+  "intervalMs": 1000,
+  "steps": [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 100, 0, 0, 0],
+  "durationSec": 46
+}
