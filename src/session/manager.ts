@@ -13,7 +13,7 @@ import { RateLimiter } from './rate-limiter';
  *
  * Two levels, because two things vary at different grains:
  *  - The session (per guild + owner) holds what is true of the phone:
- *    paused or not, the grace window, the rate limit and the reminder. One
+ *    paused or not, the grace window and the rate limit. One
  *    Lovense Remote app carries all of a person's toys, so when it drops,
  *    they all drop together.
  *  - Each ToyTease (per toy within it) holds what can differ between toys:
@@ -55,9 +55,6 @@ export interface Session {
   armedAt: number;
   suspendedAt: number | null;
   limiter: RateLimiter;
-  /** When the last reminder was due, posted or skipped. Starts at armedAt. */
-  lastReminderAt: number;
-  reminderTimer: NodeJS.Timeout | null;
   graceTimer: NodeJS.Timeout | null;
   /** Keyed by toy ID, in the order tease started on them. Never empty. */
   toys: Map<string, ToyTease>;
@@ -79,7 +76,7 @@ export interface ToyRef {
   name: string;
 }
 
-export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
+export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired';
 
 export type SessionEventListener = (payload: {
   type: SessionEventType;
@@ -89,22 +86,6 @@ export type SessionEventListener = (payload: {
 export type ErrorListener = (payload: { session: Session; error: Error }) => void;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Whether a due reminder should be posted. The one case it is skipped: the
- * session was already paused when this interval began, so the "paused"
- * notice has gone out and the whole interval was spent unreachable. One
- * message about a dead link is enough.
- */
-export function shouldPostReminder(
-  session: Pick<Session, 'state' | 'suspendedAt' | 'lastReminderAt'>,
-): boolean {
-  return !(
-    session.state === 'suspended' &&
-    session.suspendedAt !== null &&
-    session.suspendedAt <= session.lastReminderAt
-  );
-}
 
 /**
  * A command that moves nothing: Stop, or every motor at level 0 (the probe,
@@ -181,9 +162,9 @@ const TEARDOWN_SOURCES = ['suspend', 'disarm', 'shutdown', 'stop-all'];
  *    Failing closed is the only safe default here.
  *  - No expiry. Tease is driven by the other person's messages, so a
  *    session nobody is paying attention to produces nothing by itself. A
- *    timeout could only cut a quiet session short. Instead, a reminder posts
- *    to the command channel every TEASE_REMINDER_MINUTES, so it can't be
- *    lost track of.
+ *    timeout could only cut a quiet session short. The pinned status board
+ *    shows every toy's tease and how long it has run, so it can't be lost
+ *    track of.
  *  - `sendNow` is the single choke point, so the intensity cap, the rate
  *    limit and the audit log can't be bypassed by a new command.
  */
@@ -265,13 +246,10 @@ export class SessionManager {
         armedAt: now,
         suspendedAt: null,
         limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
-        lastReminderAt: now,
-        reminderTimer: null,
         graceTimer: null,
         toys: new Map(),
       };
       this.sessions.set(key, session);
-      this.scheduleReminder(session);
     }
 
     const added: ToyTease[] = [];
@@ -306,32 +284,8 @@ export class SessionManager {
     return { session, added, updated };
   }
 
-  /**
-   * Each reminder is scheduled from the previous one, not from arm time, so
-   * the interval stays even however long the session runs.
-   */
-  private scheduleReminder(session: Session): void {
-    if (config.TEASE_REMINDER_MINUTES <= 0) return;
-    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
-    const wait = Math.max(0, session.lastReminderAt + intervalMs - Date.now());
-
-    session.reminderTimer = setTimeout(() => {
-      const current = this.sessions.get(this.key(session.guildId, session.ownerId));
-      if (current !== session) return;
-
-      if (shouldPostReminder(session)) this.emit('reminder', session);
-      else log.debug(`Reminder for ${session.ownerId} skipped: paused all interval`);
-
-      session.lastReminderAt = Date.now();
-      this.scheduleReminder(session);
-    }, wait);
-    session.reminderTimer.unref?.();
-  }
-
   private clearTimers(session: Session): void {
-    if (session.reminderTimer) clearTimeout(session.reminderTimer);
     if (session.graceTimer) clearTimeout(session.graceTimer);
-    session.reminderTimer = null;
     session.graceTimer = null;
   }
 
@@ -480,14 +434,18 @@ export class SessionManager {
   }
 
   /**
-   * Block anything that moves for `ms`. A new /stop can only extend the
-   * lockout, never shorten it: it is the wearer's guarantee, and nobody else
-   * should be able to cut it short with a /stop of their own.
+   * Block anything that moves for `ms` from now, replacing any lockout
+   * already running — so a later /stop can shorten one as well as extend
+   * it, and `ms` of 0 lifts it. Either person can; the agreement about when
+   * that is OK lives between them, not in the bot.
    */
   lockOut(guildId: string, ms: number, by: string, now = Date.now()): Lockout | null {
-    const current = this.lockout(guildId, now);
-    if (ms <= 0) return current;
-    if (current && current.until >= now + ms) return current;
+    if (ms <= 0) {
+      if (this.lockout(guildId, now)) log.warn(`Stop lockout for guild ${guildId} lifted by ${by}`);
+      this.lockouts.set(guildId, null);
+      store.deleteSetting(this.lockoutKey(guildId));
+      return null;
+    }
 
     const next: Lockout = { until: now + ms, by };
     this.lockouts.set(guildId, next);
@@ -625,7 +583,7 @@ export class SessionManager {
     } catch (err) {
       const code = err instanceof LovenseError ? err.code : undefined;
       if (code !== undefined) presence.markReportedOffline(uid, code);
-      else presence.noteInconclusive(uid);
+      else presence.noteFailed(uid, undefined);
       return { ok: false, code, message: (err as Error).message };
     }
   }
@@ -682,6 +640,11 @@ export class SessionManager {
 
       const message = err instanceof LovenseError ? err.message : (err as Error).message;
       store.logCommand({ uid, description, source, ok: false, error: message });
+      // Recorded so the status board can show the last failure and what it
+      // means. Teardown Stops to a toy that is already gone don't count.
+      if (!TEARDOWN_SOURCES.includes(source)) {
+        presence.noteFailed(uid, err instanceof LovenseError ? err.code : undefined);
+      }
       // A dead link would otherwise log a probe failure every interval; the
       // presence transition already says it once.
       (isProbe ? log.debug : log.warn)(`Lovense command failed (${source}): ${message}`);

@@ -14,29 +14,32 @@ that one disagree, this one is newer.
 the signal. The bot has no software gate for it, so there is no `/on`
 container — the command is removed rather than repurposed.
 
-**Anything that stops is never gated.** `/off` and `/stop` are usable by the
+**Anything that stops is never gated.** `/stop` is usable by the
 person wearing the toy, unconditionally, whoever started something and whoever
 is controlling it. The rule: *commands that increase stimulation may be
 restricted; commands that reduce or stop it never are.*
 
-**Tease has no expiry; it has a reminder.** The trigger for tease is
-CerealAisle's own messaging, so a session left on while attention moves
-elsewhere produces nothing. Rather than a timeout that can only cut short a
-session that was going fine, the bot posts periodically to the command channel
-while tease is active — `TEASE_REMINDER_MINUTES`, default 30.
+**Tease has no expiry.** The trigger for tease is CerealAisle's own
+messaging, so a session left on while attention moves elsewhere produces
+nothing. Rather than a timeout that can only cut short a session that was
+going fine, the pinned board shows how long each toy's tease has run. (A
+periodic reminder post did this at first; it was removed as noise.)
 
 **The wearer sees three commands: `/connect`, `/test`, `/stop`.** In
 practice one person controls and the other wears, so everything else is a
 controller command, hidden with Discord's default member permissions.
-`/stop` also holds everything still for a few minutes afterwards
-(`STOP_LOCKOUT_MINUTES`), and a later `/stop` can extend that but never
-shorten it. Supersedes the command surface table at the end of this file.
+`/stop` also holds everything still afterwards (`STOP_LOCKOUT_MINUTES`,
+default 30). A later `/stop` replaces the timer, so either person can shorten
+it — always by agreement, which is theirs to keep, not the bot's. `/off` is
+gone: `/tease off:True` turns tease off. Supersedes the command surface table
+at the end of this file.
 
-**One notice per outage.** A backgrounded iOS app produced a paused/resumed
-pair every minute. Only a command that gets through now ends an outage —
-heartbeats no longer do — and nothing more is posted until it does. The
-pinned board carries the detail: the code, what it means, and a
-"backgrounded" diagnosis.
+**The bot never posts on its own.** A backgrounded iOS app produced a
+paused/resumed pair every minute. Only a command that gets through now ends
+an outage — heartbeats no longer do — and every outage, pause and error is
+shown on the pinned board instead of posted: the code, what it means, and a
+"backgrounded" diagnosis. Everything else the bot says is a reply to a
+command. All of that wording lives in `src/text.ts`.
 
 **`/stop` stays.** It was missing from the requirements draft. Halts every toy,
 clears every mode, usable by anyone, no confirmation prompt. It is the
@@ -51,8 +54,8 @@ safeword.
 
 Two rules follow, and they cover every case:
 
-- **Bot-initiated messages go to the command channel.** Disconnects, resumes,
-  tease reminders, errors. She never sees them in the shared channel.
+- **The bot initiates nothing.** Its only standing presence is the pinned
+  board in the command channel. She never sees it in the shared channel.
 - **Command replies go wherever the command was issued.** So `/status` run in
   the main channel answers in the main channel. This is what makes `/stop` and
   `/disconnect` usable by her — she only has the main channel, and she must
@@ -61,9 +64,8 @@ Two rules follow, and they cover every case:
 Commands are therefore accepted in **both** channels. Only unsolicited
 messages are confined to the command channel.
 
-**DMs are unaffected.** The disconnect DM goes to whoever must act on it —
-usually the wearer — regardless of channel. That is the one bot message she
-should always receive.
+**One kind of DM.** When `/test` finds a toy not responding for a reason its
+owner can fix, they get a DM with the steps. Nothing else sends one.
 
 **Multi-toy work is deferred** until there is a second toy to test with.
 Shipping toy addressing never exercised against two real toys would be

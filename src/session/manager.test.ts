@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { config } from '../config';
-import { command as off } from '../discord/commands/off';
+import { command as tease } from '../discord/commands/tease';
 import { command as stop } from '../discord/commands/stop';
 import { loadCommands } from '../discord/registry';
 import * as actions from '../lovense/actions';
@@ -13,8 +13,6 @@ import {
   isZeroAction,
   planTriggerSends,
   sessions,
-  shouldPostReminder,
-  type Session,
   type ToyTease,
 } from './manager';
 
@@ -73,7 +71,7 @@ function armWearer(toys = [LUSH], extra: { startedBy?: string; intensityPercent?
 describe('the wearer can always stop', () => {
   it('ends tease someone else started on their toy', async () => {
     // The case this whole file exists for: /tease user:<wearer> run by the
-    // other person, then /off by the wearer.
+    // other person, then turned off by the wearer.
     armWearer([LUSH, HUSH], { startedBy: OTHER });
     const result = sessions.disarm(GUILD, WEARER);
     await flush();
@@ -157,8 +155,9 @@ describe('the wearer can always stop', () => {
 describe('who can see which command', () => {
   // The wearer sees exactly three commands. /stop is the one that matters
   // here: it must never carry a permission gate, because it is how anyone —
-  // the wearer above all — ends everything. /off is a controller command and
-  // is hidden, which is safe only because /stop covers it.
+  // the wearer above all — ends everything. Turning tease off is part of the
+  // controller's /tease and is hidden, which is safe only because /stop
+  // covers it.
   const commands = loadCommands();
   const isHidden = (name: string) => {
     const perms = commands.get(name)!.data.toJSON().default_member_permissions;
@@ -175,9 +174,15 @@ describe('who can see which command', () => {
     assert.deepEqual(visible, ['connect', 'stop', 'test']);
   });
 
-  it('/off is hidden, but has no runtime owner check of its own', () => {
-    assert.equal(isHidden(off.data.name), true);
-    assert.ok(!off.ownerOnly);
+  it('/tease, which also turns tease off, is hidden but has no runtime owner check', () => {
+    assert.equal(isHidden(tease.data.name), true);
+    assert.ok(!tease.ownerOnly);
+  });
+
+  it('there is no /off any more: /tease off:True replaced it', () => {
+    assert.equal(commands.has('off'), false);
+    const off = tease.data.toJSON().options?.find((o) => o.name === 'off');
+    assert.ok(off, '/tease needs an off option');
   });
 });
 
@@ -212,12 +217,26 @@ describe('the /stop lockout', () => {
     assert.equal(vibrations().length, 0);
   });
 
-  it('can be extended but never shortened', () => {
-    sessions.lockOut(GUILD, 10 * 60_000, WEARER, T);
-    const after = sessions.lockOut(GUILD, 60_000, OTHER, T);
-    assert.equal(after?.until, T + 10 * 60_000);
-    assert.equal(after?.by, WEARER);
-    assert.equal(sessions.lockOut(GUILD, 20 * 60_000, OTHER, T)?.until, T + 20 * 60_000);
+  it('a later /stop replaces it, shorter or longer', () => {
+    // Either person can shorten it. When that is OK is agreed between them.
+    sessions.lockOut(GUILD, 30 * 60_000, WEARER, T);
+    const shorter = sessions.lockOut(GUILD, 5 * 60_000, OTHER, T + 60_000);
+    assert.equal(shorter?.until, T + 6 * 60_000);
+    assert.equal(shorter?.by, OTHER);
+    assert.equal(sessions.lockOut(GUILD, 60 * 60_000, WEARER, T)?.until, T + 60 * 60_000);
+  });
+
+  it('a zero-minute /stop lifts a running lockout', () => {
+    sessions.lockOut(GUILD, 30 * 60_000, WEARER);
+    assert.equal(sessions.lockOut(GUILD, 0, OTHER), null);
+    assert.equal(sessions.lockout(GUILD), null);
+  });
+
+  it('a lifted lockout stays lifted after a restart', () => {
+    sessions.lockOut(GUILD, 30 * 60_000, WEARER);
+    sessions.lockOut(GUILD, 0, WEARER);
+    (sessions as unknown as { lockouts: Map<string, unknown> }).lockouts.delete(GUILD);
+    assert.equal(sessions.lockout(GUILD), null);
   });
 
   it('runs out by itself', () => {
@@ -257,42 +276,16 @@ describe('isZeroAction', () => {
 describe('tease', () => {
   afterEach(() => mock.timers.reset());
 
-  it('has no expiry, and reminds on an even interval instead', () => {
+  it('has no expiry, and emits nothing while it runs', () => {
+    // The pinned board is the ambient view; the bot posts nothing on its own.
     mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-    const reminders: Session[] = [];
-    sessions.onEvent(({ type, session }) => {
-      if (type === 'reminder' && session.ownerId === WEARER) reminders.push(session);
-    });
+    let events = 0;
+    sessions.onEvent(({ session }) => session.ownerId === WEARER && events++);
 
     armWearer();
-    const intervalMs = config.TEASE_REMINDER_MINUTES * 60_000;
-
-    mock.timers.tick(intervalMs - 1);
-    assert.equal(reminders.length, 0, 'no reminder before the first interval');
-
-    mock.timers.tick(1);
-    assert.equal(reminders.length, 1);
-
-    // Eight hours on: still running, and exactly one reminder per interval.
-    // Stepped an interval at a time; one big tick moves the mocked clock to
-    // the end before the callbacks run.
-    const steps = Math.floor((8 * 3_600_000) / intervalMs);
-    for (let i = 0; i < steps; i++) mock.timers.tick(intervalMs);
+    for (let i = 0; i < 16; i++) mock.timers.tick(30 * 60_000);
     assert.ok(sessions.get(GUILD, WEARER), 'tease must not expire by itself');
-    assert.equal(reminders.length, 1 + steps);
-  });
-
-  it('stops reminding once it is turned off', () => {
-    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
-    let count = 0;
-    sessions.onEvent(({ type, session }) => {
-      if (type === 'reminder' && session.ownerId === WEARER) count++;
-    });
-
-    armWearer();
-    sessions.disarm(GUILD, WEARER);
-    mock.timers.tick(config.TEASE_REMINDER_MINUTES * 60_000 * 3);
-    assert.equal(count, 0);
+    assert.equal(events, 0);
   });
 
   it('running it again retunes a toy without resetting its count', () => {
@@ -315,29 +308,6 @@ describe('tease', () => {
     assert.deepEqual(added.map((t) => t.toyId), [HUSH.id]);
     assert.equal(session.toys.get(LUSH.id)!.intensityPercent, 30);
     assert.equal(session.toys.get(HUSH.id)!.intensityPercent, 90);
-  });
-});
-
-describe('shouldPostReminder', () => {
-  const T = 1_000_000;
-
-  it('posts while tease is running normally', () => {
-    assert.equal(shouldPostReminder({ state: 'armed', suspendedAt: null, lastReminderAt: T }), true);
-  });
-
-  it('posts when the toy dropped during this interval — that is news', () => {
-    assert.equal(
-      shouldPostReminder({ state: 'suspended', suspendedAt: T + 1, lastReminderAt: T }),
-      true,
-    );
-  });
-
-  it('skips when the toy was already paused for the whole interval', () => {
-    // The "paused" notice already said so. One message about a dead link.
-    assert.equal(
-      shouldPostReminder({ state: 'suspended', suspendedAt: T - 1, lastReminderAt: T }),
-      false,
-    );
   });
 });
 

@@ -3,6 +3,7 @@ import { makeUid } from '../../lovense/client';
 import { sessions } from '../../session/manager';
 import { presence } from '../../session/presence';
 import { store } from '../../store/store';
+import { text } from '../../text';
 import type { BotCommand } from '../types';
 
 /**
@@ -14,10 +15,8 @@ export const command: BotCommand = {
     .setName('disconnect')
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
-    .setDescription('Unlink a toy and delete its record from the bot')
-    .addUserOption((o) =>
-      o.setName('target').setDescription('Whose toy to unlink (defaults to yours)'),
-    ),
+    .setDescription(text.disconnect.describe)
+    .addUserOption((o) => o.setName('target').setDescription(text.disconnect.describeTarget)),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -25,12 +24,9 @@ export const command: BotCommand = {
     const target = interaction.options.getUser('target') ?? interaction.user;
     const self = target.id === interaction.user.id;
     const uid = makeUid(interaction.guildId, target.id);
-    const link = store.getByUid(uid);
 
-    if (!link) {
-      await interaction.reply({
-        content: self ? 'You have no toy linked here.' : `${target.displayName} has no toy linked here.`,
-      });
+    if (!store.getByUid(uid)) {
+      await interaction.reply(text.disconnect.nothingLinked(self, target.displayName));
       return;
     }
 
@@ -38,11 +34,6 @@ export const command: BotCommand = {
     store.deleteLink(uid);
     presence.forget(uid);
 
-    await interaction.reply({
-      content:
-        `Unlinked ${self ? 'your toy' : `${target.displayName}'s toy`} and turned tease off. ` +
-        'For a full disconnect, also press **Stop** in the Lovense Remote app. ' +
-        '`/connect` links again.',
-    });
+    await interaction.reply(text.disconnect.done(self, target.displayName));
   },
 };

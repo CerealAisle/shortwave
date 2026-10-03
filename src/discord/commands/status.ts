@@ -1,38 +1,34 @@
-import { EmbedBuilder, SlashCommandBuilder, time, userMention } from 'discord.js';
+import { EmbedBuilder, SlashCommandBuilder, userMention } from 'discord.js';
 import { toyLabel } from '../../lovense/toys';
 import { sessions, type Session, type ToyTease } from '../../session/manager';
 import { isToyConnected, presence } from '../../session/presence';
 import { store, type ToyLink } from '../../store/store';
+import { text } from '../../text';
 import { describeTease } from '../toy-option';
 import type { BotCommand } from '../types';
 
 /** One line per toy: battery, connection, and its tease if any. */
 function toyLines(link: ToyLink, session: Session | undefined): string[] {
-  const paused = session?.state === 'suspended';
-  const lines = link.toys.map((t) => {
-    const battery = t.battery !== undefined ? ` ${t.battery}%` : '';
-    const mark = isToyConnected(t) ? '' : ' — disconnected';
-    const tease = session?.toys.get(t.id);
-    return `• ${toyLabel(t)}${battery}${mark} — ${teaseText(tease, session, paused)}`;
-  });
+  const lines = link.toys.map((t) =>
+    text.status.toyLine(toyLabel(t), t.battery, isToyConnected(t), teaseText(session?.toys.get(t.id), session)),
+  );
 
   // A toy still teasing that its app no longer lists (removed in the app).
   for (const tease of session?.toys.values() ?? []) {
     if (!link.toys.some((t) => t.id === tease.toyId)) {
-      lines.push(`• ${tease.toyName} — not reported by the app — ${teaseText(tease, session, paused)}`);
+      lines.push(text.status.toyGone(tease.toyName, teaseText(tease, session)));
     }
   }
 
-  return lines.length > 0 ? lines : ['• none reported yet'];
+  return lines.length > 0 ? lines : [text.status.noToys];
 }
 
-function teaseText(tease: ToyTease | undefined, session: Session | undefined, paused: boolean): string {
-  if (!tease || !session) return 'tease off';
-  const by = tease.startedBy === session.ownerId ? '' : ` by ${userMention(tease.startedBy)}`;
-  return (
-    `${paused ? '**tease paused** (toy offline)' : '**tease on**'} at ${describeTease(tease)} · ` +
-    `started ${time(Math.floor(tease.armedAt / 1000), 'R')}${by}`
-  );
+function teaseText(tease: ToyTease | undefined, session: Session | undefined): string {
+  if (!tease || !session) return text.status.teaseOff;
+  const by = tease.startedBy === session.ownerId ? null : tease.startedBy;
+  return session.state === 'suspended'
+    ? text.status.teasePaused(describeTease(tease), tease.armedAt, by)
+    : text.status.teaseOn(describeTease(tease), tease.armedAt, by);
 }
 
 export const command: BotCommand = {
@@ -40,7 +36,7 @@ export const command: BotCommand = {
     .setName('status')
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
-    .setDescription('Show linked toys and which have tease on'),
+    .setDescription(text.status.describe),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -48,32 +44,24 @@ export const command: BotCommand = {
     const links = store.listByGuild(interaction.guildId);
 
     if (links.length === 0) {
-      await interaction.reply('No toys are linked in this server. Run `/connect` to link one.');
+      await interaction.reply(text.status.noLinks);
       return;
     }
 
-    const embed = new EmbedBuilder().setTitle('Toy status').setColor(0x5865f2);
+    const embed = new EmbedBuilder().setTitle(text.status.embedTitle).setColor(0x5865f2);
 
     for (const link of links) {
       const session = sessions.get(interaction.guildId, link.discordUserId);
       const status = presence.statusFor(link);
-
-      const presenceLabel = {
-        online: '🟢 Online',
-        offline: '🔴 Offline',
-        unknown: '⚪ Unknown',
-      }[status.presence];
+      const noHeartbeats =
+        status.presence === 'unknown' && presence.enabled && link.lastSeen
+          ? text.status.noHeartbeats
+          : '';
 
       const lines = [
-        `${presenceLabel}${
-          status.presence === 'unknown' && presence.enabled && link.lastSeen
-            ? ' (no heartbeats — enable heartbeat in the Lovense dashboard)'
-            : ''
-        }`,
-        `App: ${link.platform ?? 'unknown'}`,
-        link.lastSeen
-          ? `Last heartbeat: ${time(Math.floor(link.lastSeen / 1000), 'R')}`
-          : 'Last heartbeat: never — QR not scanned yet',
+        text.status[status.presence] + noHeartbeats,
+        text.status.app(link.platform),
+        link.lastSeen ? text.status.lastCheckIn(link.lastSeen) : text.status.neverCheckedIn,
         ...toyLines(link, session),
       ];
 

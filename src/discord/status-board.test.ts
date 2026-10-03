@@ -66,8 +66,6 @@ function session(over: Partial<Session> = {}, teases: ToyTease[] = [tease()]): S
     armedAt: NOW - (2 * 60 + 14) * 60_000,
     suspendedAt: null,
     limiter: new RateLimiter(0, 100),
-    lastReminderAt: NOW,
-    reminderTimer: null,
     graceTimer: null,
     toys: new Map(teases.map((t) => [t.toyId, t])),
     ...over,
@@ -79,7 +77,7 @@ describe('renderBoardBody', () => {
     const body = renderBoardBody([row()], NOW);
     assert.match(body, /\*\*Daddy\*\* · <@111>/);
     assert.match(body, /🟢 Lush 3 · 87%/);
-    assert.match(body, /reachable, probed <t:\d+:R>/);
+    assert.match(body, /reachable, checked <t:\d+:R>/);
     assert.match(body, /tease off/);
   });
 
@@ -94,7 +92,7 @@ describe('renderBoardBody', () => {
       NOW,
     );
     assert.match(body, /🔴 Lush 3/);
-    assert.match(body, /unreachable since <t:\d+:R> — Lovense Remote is not reachable \(507\)/);
+    assert.match(body, /unreachable since <t:\d+:R> — Lovense Remote isn't reachable \(507\)/);
   });
 
   it('names a backgrounded app: heartbeats arriving but commands refused', () => {
@@ -121,7 +119,17 @@ describe('renderBoardBody', () => {
       [row({}, { presence: 'offline', lastResult: { at: NOW, ok: false, code: 503 } })],
       NOW,
     );
-    assert.match(body, /does not know this link — run \/connect again \(503\)/);
+    assert.match(body, /doesn't know this link — run \/connect again \(503\)/);
+  });
+
+  it('shows the last failed command while the app is still checking in', () => {
+    // Online on check-ins alone, so the failure would otherwise go unseen —
+    // and the bot no longer posts errors to the channel.
+    const body = renderBoardBody(
+      [row({}, { presence: 'online', lastResult: { at: NOW - 30_000, ok: false, code: 400 } })],
+      NOW,
+    );
+    assert.match(body, /reachable \(app checking in\) · last command failed <t:\d+:R>: Lovense rejected/);
   });
 
   it('puts a banner, such as a /stop lockout, above everything', () => {
@@ -183,7 +191,7 @@ describe('renderBoardBody with two toys', () => {
   it('still shows a teasing toy the app has stopped listing', () => {
     const gone = tease({ toyId: 'gone', toyName: 'Old Toy' });
     const body = renderBoardBody([two(session({}, [tease(), gone]))], NOW);
-    assert.match(body, /Old Toy · not reported — tease on/);
+    assert.match(body, /Old Toy · no longer reported — tease on/);
   });
 });
 

@@ -610,17 +610,17 @@ aggressive about suspending background apps than anything on the server side.
    iOS pins it in the foreground, which is the most reliable state there is.
    Overkill for a short session, worth it for hours.
 
-9. **Let the bot's DMs through.** When the toy drops, the bot sends her a
-   direct message telling her to force-quit and reopen Lovense Remote — that
-   is the recovery path, and iOS offers no way to automate it. For the
+9. **Let the bot's DMs through.** When `/test` finds her toy not responding,
+   the bot DMs her the steps to fix it — usually force-quit and reopen
+   Lovense Remote, which iOS offers no way to automate. For the
    notification to actually arrive: Discord must be allowed to notify (iOS
    Settings → Notifications → Discord), the DM conversation must not be muted,
    and Discord should be in the allow list of any Focus mode she uses. In
    Discord, opening the bot's DM and setting notifications to **All Messages**
    is worth doing once.
 
-   Set `DM_ON_DISCONNECT=false` in `.env` if you would rather have only the
-   channel message.
+   Set `DM_ON_FAILED_TEST=false` in `.env` if you would rather keep it to
+   the `/test` reply.
 
 **Reliability, most to least:** app in the foreground with the screen locked →
 app backgrounded while using light apps → app backgrounded while playing a
@@ -638,8 +638,7 @@ In your Discord server, in the main channel:
 2. She runs `/connect`. She gets an ephemeral QR code (only she can see it).
    In Lovense Remote: **Me → Scan QR code**, scan, confirm.
 
-   Within a few seconds the command channel should show *"… connected successfully
-   (…)"*. If nothing appears the callback isn't arriving — check
+   Within a few seconds her private QR reply should change to *"✅ Connected"*. If nothing appears the callback isn't arriving — check
    `journalctl -u lovense-bot -n 50` and `curl https://.../healthz`.
 
 3. `/status` again, then once more after 2–3 minutes. The presence line should
@@ -659,8 +658,8 @@ In your Discord server, in the main channel:
    feel a buzz within a second or so.
 
 8. Test the safeword: with tease on, **she** runs `/stop`. Everything halts,
-   and the command channel tells you she did. Then try `/buzz` — it should
-   refuse until the lockout runs out (3 minutes by default).
+   and the pinned status board shows a 🛑 banner naming her. Then try `/buzz` —
+   it should refuse. `/stop duration:0` lifts the lockout once you've agreed to.
 
 ---
 

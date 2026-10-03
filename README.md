@@ -5,7 +5,7 @@ Lovense toy over Lovense's cloud API — no LAN between the bot and the toy.
 
 **Flow:** `/connect` links a toy by QR code → `/tease` turns tease on → every
 message from the *other* person in the main channel sends a short buzz →
-`/off` turns it off.
+`/tease off:True` turns it off.
 
 **Setting this up? Follow [DEPLOY.md](DEPLOY.md)** — a linear,
 copy-pasteable walkthrough from bare host to working bot. This README is the
@@ -92,6 +92,7 @@ src/
 ├── index.ts                    entrypoint: wiring + graceful shutdown
 ├── config.ts                   env parsing/validation (zod) — fails fast
 ├── logger.ts                   leveled console logging
+├── text.ts                     every word the bot shows in Discord — edit here
 │
 ├── lovense/
 │   ├── types.ts                ToyAction union + API payload types
@@ -119,6 +120,9 @@ src/
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── status-board.ts         pinned live-status post in the command channel
+    ├── pending-connect.ts      confirms a QR scan by editing the /connect reply
+    ├── failure.ts              a failed send, as a reply
+    ├── dm.ts                   the one DM: fix-it steps after a failed /test
     ├── toy-option.ts           the shared `toy` option and its autocomplete
     ├── events/message-create.ts  the trigger path
     └── commands/               one file per slash command
@@ -170,9 +174,10 @@ before you change anything:
   wearing a toy can always end everything. `src/session/manager.test.ts`
   holds this in place.
 - **`/stop` holds everything still afterwards.** For `STOP_LOCKOUT_MINUTES`
-  (default 3), or the `duration` given, nothing that moves can start — no
-  buzz, pattern or tease, from anyone. A later `/stop` can extend the lockout
-  but never shorten it. It is enforced in `sendNow`, so no command can get
+  (default 30), or the `duration` given, nothing that moves can start — no
+  buzz, pattern or tease, from anyone. A later `/stop` replaces the timer, so
+  either person can shorten it, and `/stop duration:0` lifts it. When that
+  is OK is agreed between the two of you, not decided by the bot. It is enforced in `sendNow`, so no command can get
   round it, and saved to the database, so a restart can't end it early. 0%
   commands (`/test`, the probe) still go through.
 - **The owner's own messages never trigger their toy** — that check is in
@@ -180,13 +185,10 @@ before you change anything:
 - **`/stop` works for either person.** It halts every toy in the server and
   disarms every session. It's the safeword, so it deliberately isn't
   owner-restricted and never waits on a confirmation prompt.
-- **Tease has no expiry; it has a reminder.** Tease is driven by the other
-  person's messages, so tease nobody is paying attention to produces nothing
-  by itself, and a timeout could only cut a quiet session short. Instead,
-  every `TEASE_REMINDER_MINUTES` (default 30) a fresh, non-pinging message in
-  the command channel gives the buzz count, strength and whether the toy is
-  reachable. It is skipped if the toy was already paused for the whole
-  interval, since the pause notice said so.
+- **Tease has no expiry.** Tease is driven by the other person's messages,
+  so tease nobody is paying attention to produces nothing by itself, and a
+  timeout could only cut a quiet session short. The pinned status board shows
+  every toy's tease and how long it has run, so it can't be lost track of.
 - **Restarts fail closed.** Armed state is in memory only, never persisted. A
   crash, reboot or `systemctl restart` comes back disarmed.
 - **Shutdown stops the toy.** `SIGTERM` sends a Stop to every armed toy before
@@ -220,12 +222,16 @@ before you change anything:
   letting each heartbeat clear the 507 made sessions flap between paused and
   resumed every minute. Instead, a heartbeat brings the next probe forward
   (at most once a minute), and that probe's success is what resumes.
-- **One notice per outage.** When a toy stops responding, a single message in
-  the command channel says why (the code and what it means) and what to do,
-  and the wearer gets one DM. Nothing more is posted — no "resumed", no
-  repeat — until a command succeeds. The pinned status board shows the live
-  state, including a "looks backgrounded" warning when heartbeats are
-  arriving but commands are refused.
+- **The bot never posts on its own.** Everything it says is either the reply
+  to a command or on the pinned status board. Outages, pauses, recoveries and
+  errors all appear on the board: the code, what it means, and a "looks
+  backgrounded" warning when the app is checking in but refusing commands.
+  Even the QR scan is confirmed by editing the private `/connect` reply.
+- **One kind of DM.** When `/test` finds a toy not responding for a reason
+  its owner can fix, they get a DM with the steps for that failure —
+  force-quit a backgrounded app, open a closed one, reconnect Bluetooth,
+  re-pair a lost link. Nothing else sends a DM. `DM_ON_FAILED_TEST=false`
+  turns it off.
 - **`/tease` refuses an unreachable toy** rather than starting into the void.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
@@ -314,8 +320,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAX_INTENSITY_PERCENT` | `100` | Hard ceiling on every command |
 | `MIN_COMMAND_INTERVAL_MS` | `1500` | Minimum gap between commands |
 | `MAX_COMMANDS_PER_MINUTE` | `25` | Sliding-window cap |
-| `STOP_LOCKOUT_MINUTES` | `3` | After `/stop`, how long nothing that moves can start. `/stop duration:` overrides it per use; `0` locks nothing out |
-| `TEASE_REMINDER_MINUTES` | `30` | Reminder interval while tease is on; `0` disables. Tease never expires |
+| `STOP_LOCKOUT_MINUTES` | `30` | After `/stop`, how long nothing that moves can start. `/stop duration:` overrides it per use; a later `/stop` replaces it, and `duration:0` lifts it |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
 | `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
 | `PROBE_INTERVAL_SEC` | `300` | `Vibrate:0` liveness probe per toy; `0` disables |
@@ -323,8 +328,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `OFFLINE_GRACE_SEC` | `300` | Pause-before-disarm window; `0` disarms on first blip |
 | `WAKE_RETRY_ATTEMPTS` | `2` | Retries for a 507 from a sleeping iOS app |
 | `WAKE_RETRY_DELAY_MS` | `700` | Base retry delay (grows per attempt) |
-| `DM_ON_DISCONNECT` | `true` | DM the owner when their toy drops |
-| `DM_COOLDOWN_SEC` | `600` | Minimum gap between disconnect DMs |
+| `DM_ON_FAILED_TEST` | `true` | When `/test` fails, DM the toy's owner the steps to fix it. The only DM the bot sends |
 | `TRIGGER_ON_BOT_MESSAGES` | `false` | Whether other bots/webhooks count |
 | `LOG_LEVEL` | `info` | `debug` to trace every trigger decision |
 
@@ -338,21 +342,24 @@ granularity is really 5% steps.
 
 Every command replies in the channel it was run in.
 
+All wording the bot shows in Discord lives in `src/text.ts`, grouped by
+command, with a note on when each message appears. Edit it there; `npm test`
+checks that descriptions still fit Discord's limits.
+
 **Everyone** sees these three, and nothing else:
 
 | Command | What it does |
 |---|---|
 | `/connect` | Ephemeral QR code to link your own toy |
-| `/test [target]` | Sends a 0% command to each connected toy — nothing moves — and posts which are responding, with what any error means. Defaults to yourself |
-| `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`). Never gated. Tells the command channel when run elsewhere |
+| `/test [target]` | Sends a 0% command to each connected toy — nothing moves — and posts which are responding, with what any error means. If one isn't, DMs its owner how to fix it. Defaults to yourself |
+| `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`, 30). A later `/stop` replaces the timer; `duration:0` lifts it. Never gated |
 
 **The controller** (anyone with Administrator, which includes the server
 owner) also sees:
 
 | Command | What it does |
 |---|---|
-| `/tease [user] [toy] [intensity] [duration]` | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length |
-| `/off [toy]` | Turn tease off on your toys (or one of them) and stop them |
+| `/tease [user] [toy] [intensity] [duration] [off]` | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length. With `off:True`, turns tease off for that user (or just that toy) and sends a stop, even during a `/stop` lockout |
 | `/buzz <intensity> <seconds> [target] [toy]` | One-off manual vibration |
 | `/pattern <name> [target] [toy]` | Play a named pattern from `patterns/`. The name autocompletes |
 | `/status` | Linked toys, battery, tease state, trigger counts |
@@ -372,8 +379,8 @@ picker and cannot run them. Two things keep that true:
 **More than one toy.** Every toy paired to a person's Lovense Remote app is
 listed under them, and `toy` picks one by nickname or model — it
 autocompletes from that person's toys. Leave it out and `/buzz` and
-`/pattern` go to all of them, `/tease` covers every connected toy, and `/off`
-turns all of yours off. Tease strength, length and counts are per toy, so two
+`/pattern` go to all of them, `/tease` covers every connected toy, and
+`/tease off:True` turns all of them off. Tease strength, length and counts are per toy, so two
 toys can tease at different strengths; pausing is per person, because one
 phone carries all their toys. `/stop` has no toy option: it is the safeword
 and always stops everything.
@@ -548,8 +555,9 @@ spending time on it:
   phone anyone is carrying.
 
 So the recovery path is a human, and the bot's job is to reach them quickly.
-`DM_ON_DISCONNECT` does that: a direct message raises a push notification even
-when the channel is muted, and tells them exactly what to do. Set the DM
+Running `/test` does that: when it fails, the toy's owner gets a DM with the
+fix for that failure, and a DM raises a push notification even when the
+channel is muted. Set the DM
 conversation to allow notifications, and on iOS add Discord to any Focus mode
 that might be active.
 

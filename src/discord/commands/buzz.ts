@@ -1,6 +1,7 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import * as actions from '../../lovense/actions';
-import { LovenseError, makeUid } from '../../lovense/client';
+import { makeUid } from '../../lovense/client';
+import { failureText } from '../failure';
 import { sessions } from '../../session/manager';
 import { store } from '../../store/store';
 import { resolveToys } from '../../lovense/toys';
@@ -11,6 +12,7 @@ import {
   toyNames,
 } from '../toy-option';
 import { refuseIfStopped } from '../lockout';
+import { text } from '../../text';
 import type { BotCommand } from '../types';
 
 /**
@@ -28,11 +30,11 @@ export const command: BotCommand = {
     .setName('buzz')
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
-    .setDescription('Vibrate a linked toy at a given strength for a given time')
+    .setDescription(text.buzz.describe)
     .addIntegerOption((o) =>
       o
         .setName('intensity')
-        .setDescription('Strength as a percentage')
+        .setDescription(text.buzz.describeIntensity)
         .setMinValue(1)
         .setMaxValue(100)
         .setRequired(true),
@@ -40,13 +42,13 @@ export const command: BotCommand = {
     .addNumberOption((o) =>
       o
         .setName('seconds')
-        .setDescription('How long to run')
+        .setDescription(text.buzz.describeSeconds)
         .setMinValue(1)
         .setMaxValue(300)
         .setRequired(true),
     )
     .addUserOption((o) =>
-      o.setName('target').setDescription('Whose toy (defaults to yours)'),
+      o.setName('target').setDescription(text.buzz.describeTarget),
     )
     .addStringOption((o) =>
       o.setName(TOY_OPTION).setDescription(TOY_OPTION_DESCRIPTION).setAutocomplete(true),
@@ -65,7 +67,7 @@ export const command: BotCommand = {
 
     if (!link) {
       await interaction.reply({
-        content: `${target.displayName} has no toy linked in this server.`,
+        content: text.common.noToy(target.id === interaction.user.id, target.displayName),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -76,13 +78,13 @@ export const command: BotCommand = {
     const resolved = query ? resolveToys(link.toys, query) : null;
     if (resolved && !resolved.ok) {
       await interaction.reply({
-        content: `Cannot buzz: ${resolved.error}.`,
+        content: text.buzz.badToy(resolved.error),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     const toyIds = resolved?.ok ? resolved.toys.map((t) => t.id) : [undefined];
-    const which = resolved?.ok ? ` on ${toyNames(resolved.toys)}` : '';
+    const which = resolved?.ok ? toyNames(resolved.toys) : null;
 
     const intensity = interaction.options.getInteger('intensity', true);
     const seconds = interaction.options.getNumber('seconds', true);
@@ -98,12 +100,9 @@ export const command: BotCommand = {
           { toyId },
         );
       }
-      await interaction.editReply(
-        `Sent: ${intensity}% for ${seconds}s${which}. Use \`/stop\` to end it early.`,
-      );
+      await interaction.editReply(text.buzz.sent(intensity, seconds, which));
     } catch (err) {
-      const message = err instanceof LovenseError ? err.message : (err as Error).message;
-      await interaction.editReply(`Command failed: ${message}`);
+      await interaction.editReply(failureText(err));
     }
   },
 };

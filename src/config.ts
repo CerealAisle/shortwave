@@ -36,15 +36,10 @@ const schema = z.object({
 
   MIN_COMMAND_INTERVAL_MS: z.coerce.number().int().min(0).default(1500),
   MAX_COMMANDS_PER_MINUTE: z.coerce.number().int().min(1).default(25),
-  // Tease has no expiry. Instead, while it is on, a reminder posts to the
-  // command channel this often, carrying the buzz count and whether the toy
-  // is reachable. Set to 0 to disable.
-  TEASE_REMINDER_MINUTES: z.coerce.number().min(0).default(30),
-
   // After /stop, nothing that moves may start for this long — no buzz,
-  // pattern or tease, from anyone. /stop's `duration` overrides it per use.
-  // 0 means /stop halts everything but locks nothing out.
-  STOP_LOCKOUT_MINUTES: z.coerce.number().min(0).max(120).default(3),
+  // pattern or tease, from anyone. /stop's `duration` overrides it per use,
+  // and a later /stop replaces it, so `duration:0` lifts it early.
+  STOP_LOCKOUT_MINUTES: z.coerce.number().min(0).max(120).default(30),
 
   // Liveness. Requires "heartbeat" to be enabled in the Lovense developer
   // dashboard — without it, Lovense Remote only calls back once at pairing
@@ -75,17 +70,14 @@ const schema = z.object({
   WAKE_RETRY_ATTEMPTS: z.coerce.number().int().min(0).max(5).default(2),
   WAKE_RETRY_DELAY_MS: z.coerce.number().int().min(100).default(700),
 
-  // DM the toy's owner when their link drops. A channel message is easy to
-  // miss; a DM raises a push notification on the phone that needs the fix.
-  // iOS cannot be automated into restarting the Lovense app, so a human
-  // tapping the notification is the recovery path.
-  DM_ON_DISCONNECT: z
+  // When /test finds a toy not responding, DM its owner how to fix it. The
+  // bot sends no other DMs: iOS can't be automated into restarting the
+  // Lovense app, so the fix is a person, and a DM is a push notification
+  // that reaches them. Set to false to keep it to the /test reply.
+  DM_ON_FAILED_TEST: z
     .string()
     .optional()
     .transform((v) => v !== 'false' && v !== '0'),
-  // Minimum gap between disconnect DMs for the same person, so a flapping
-  // connection doesn't turn into a notification storm.
-  DM_COOLDOWN_SEC: z.coerce.number().min(0).default(600),
 
   TRIGGER_ON_BOT_MESSAGES: bool,
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

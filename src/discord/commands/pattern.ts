@@ -1,5 +1,6 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { LovenseError, makeUid } from '../../lovense/client';
+import { makeUid } from '../../lovense/client';
+import { failureText } from '../failure';
 import { listPatternNames, loadAllPatterns, loadPattern, patternAction } from '../../lovense/patterns';
 import { sessions } from '../../session/manager';
 import { resolveToys } from '../../lovense/toys';
@@ -11,6 +12,7 @@ import {
   toyNames,
 } from '../toy-option';
 import { refuseIfStopped } from '../lockout';
+import { text } from '../../text';
 import type { BotCommand } from '../types';
 
 /**
@@ -27,16 +29,16 @@ export const command: BotCommand = {
     .setName('pattern')
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
-    .setDescription('Play a named pattern on a linked toy')
+    .setDescription(text.pattern.describe)
     .addStringOption((o) =>
       o
         .setName('name')
-        .setDescription('Which pattern (from the patterns folder)')
+        .setDescription(text.pattern.describeName)
         .setRequired(true)
         .setAutocomplete(true),
     )
     .addUserOption((o) =>
-      o.setName('target').setDescription('Whose toy (defaults to yours)'),
+      o.setName('target').setDescription(text.pattern.describeTarget),
     )
     .addStringOption((o) =>
       o.setName(TOY_OPTION).setDescription(TOY_OPTION_DESCRIPTION).setAutocomplete(true),
@@ -55,7 +57,7 @@ export const command: BotCommand = {
       .map(({ name, result }) => {
         const detail = result.ok
           ? `${result.pattern.durationSec}s${result.pattern.description ? ` · ${result.pattern.description}` : ''}`
-          : 'invalid file — see /pattern';
+          : text.pattern.invalidSuggestion;
         return { name: `${name} — ${detail}`.slice(0, 100), value: name };
       });
     await interaction.respond(choices);
@@ -72,10 +74,10 @@ export const command: BotCommand = {
       const available = listPatternNames();
       await interaction.reply({
         content:
-          `Cannot play "${name}": ${loaded.error}.\n` +
+          `${text.pattern.cannotPlay(name, loaded.error)}\n` +
           (available.length > 0
-            ? `Available: ${available.map((n) => `\`${n}\``).join(', ')}`
-            : 'There are no patterns yet. Copy `patterns/_template.json` to add one.'),
+            ? text.pattern.available(available.map((n) => `\`${n}\``).join(', '))
+            : text.pattern.noPatterns),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -85,7 +87,7 @@ export const command: BotCommand = {
     const link = store.getByUser(interaction.guildId, target.id);
     if (!link) {
       await interaction.reply({
-        content: `${target.displayName} has no toy linked in this server.`,
+        content: text.common.noToy(target.id === interaction.user.id, target.displayName),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -96,13 +98,13 @@ export const command: BotCommand = {
     const resolved = query ? resolveToys(link.toys, query) : null;
     if (resolved && !resolved.ok) {
       await interaction.reply({
-        content: `Cannot play "${name}": ${resolved.error}.`,
+        content: text.pattern.badToy(name, resolved.error),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     const toyIds = resolved?.ok ? resolved.toys.map((t) => t.id) : [undefined];
-    const which = resolved?.ok ? ` on ${toyNames(resolved.toys)}` : '';
+    const which = resolved?.ok ? toyNames(resolved.toys) : null;
 
     const { pattern } = loaded;
     await interaction.deferReply();
@@ -116,12 +118,9 @@ export const command: BotCommand = {
           { toyId },
         );
       }
-      await interaction.editReply(
-        `Playing **${pattern.name}** for ${pattern.durationSec}s${which}. Use \`/stop\` to end it early.`,
-      );
+      await interaction.editReply(text.pattern.playing(pattern.name, pattern.durationSec, which));
     } catch (err) {
-      const message = err instanceof LovenseError ? err.message : (err as Error).message;
-      await interaction.editReply(`Command failed: ${message}`);
+      await interaction.editReply(failureText(err));
     }
   },
 };

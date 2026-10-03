@@ -2,8 +2,6 @@ import {
   ChannelType,
   DiscordAPIError,
   RESTJSONErrorCodes,
-  time,
-  userMention,
   type Client,
   type Message,
   type TextChannel,
@@ -14,6 +12,8 @@ import { toyLabel } from '../lovense/toys';
 import type { Session, ToyTease } from '../session/manager';
 import { diagnose, isToyConnected, type PresenceStatus } from '../session/presence';
 import type { ToyLink } from '../store/store';
+import { explainCode } from '../lovense/client';
+import { text } from '../text';
 import { describeTease } from './toy-option';
 
 /** Minimum gap between edits. A flapping toy coalesces into one edit. */
@@ -31,8 +31,6 @@ export interface BoardRow {
   session: Session | undefined;
 }
 
-const rel = (ms: number) => time(Math.floor(ms / 1000), 'R');
-
 function formatDuration(ms: number): string {
   const totalMin = Math.max(0, Math.floor(ms / 60_000));
   const h = Math.floor(totalMin / 60);
@@ -45,27 +43,34 @@ function reachability(row: BoardRow): string {
   const result = status.lastResult;
 
   switch (status.presence) {
-    case 'online':
-      return result?.ok ? `reachable, probed ${rel(result.at)}` : 'reachable (heartbeat)';
+    case 'online': {
+      if (result?.ok) return text.board.reachableProbed(result.at);
+      // Online on the strength of check-ins, while the last command failed.
+      const failed =
+        result && !result.ok
+          ? text.board.lastFailed(result.at, explainCode(result.code), result.code)
+          : '';
+      return text.board.reachableHeartbeat + failed;
+    }
     case 'offline': {
-      const when = since ? ` since ${rel(since)}` : '';
       const why = diagnose(status);
-      if (!why) return `unreachable${when} — no check-in from the app`;
-      const code = why.code !== undefined ? ` (${why.code})` : '';
+      if (!why) return text.board.unreachableSilent(since);
       return (
-        `unreachable${when} — ${why.meaning}${code}` +
-        (why.hint ? `\n> ⚠️ ${why.hint[0]!.toUpperCase()}${why.hint.slice(1)}` : '')
+        text.board.unreachable(since, why.meaning, why.code) +
+        (why.hint ? `\n> ${text.board.hint(why.hint)}` : '')
       );
     }
     case 'unknown':
-      return row.link.lastSeen === null ? 'QR not scanned yet' : 'unknown — not probed yet';
+      return row.link.lastSeen === null ? text.board.notScanned : text.board.notChecked;
   }
 }
 
 function teaseText(tease: ToyTease | undefined, session: Session | undefined, now: number): string {
-  if (!tease || !session) return 'tease off';
-  const label = session.state === 'suspended' ? 'tease paused (toy offline)' : 'tease on';
-  return `${label} at ${describeTease(tease)} · ${formatDuration(now - tease.armedAt)}`;
+  if (!tease || !session) return text.board.teaseOff;
+  const running = formatDuration(now - tease.armedAt);
+  return session.state === 'suspended'
+    ? text.board.teasePaused(describeTease(tease), running)
+    : text.board.teaseOn(describeTease(tease), running);
 }
 
 /**
@@ -79,7 +84,7 @@ export function renderBoardBody(
   banner: string | null = null,
 ): string {
   const top = banner ? `${banner}\n\n` : '';
-  if (rows.length === 0) return `${top}*No toys linked. Run \`/connect\` to link one.*`;
+  if (rows.length === 0) return `${top}${text.board.noLinks}`;
 
   return top + rows
     .map((row) => {
@@ -90,23 +95,21 @@ export function renderBoardBody(
       // is disconnected gets its own mark: the phone can be fine while one
       // toy's Bluetooth has dropped.
       const toys = link.toys.map((t) => {
-        const battery = t.battery !== undefined ? ` · ${t.battery}%` : '';
         const connected = isToyConnected(t);
-        const mark = connected ? '' : ' · disconnected';
         const tease = teaseText(session?.toys.get(t.id), session, now);
-        return `${connected ? dot : '⚫'} ${toyLabel(t)}${battery}${mark} — ${tease}`;
+        return text.board.toyLine(connected ? dot : '⚫', toyLabel(t), t.battery, connected, tease);
       });
 
       // Still teasing, but the app no longer lists it.
       for (const tease of session?.toys.values() ?? []) {
         if (!link.toys.some((t) => t.id === tease.toyId)) {
-          toys.push(`⚫ ${tease.toyName} · not reported — ${teaseText(tease, session, now)}`);
+          toys.push(text.board.toyGone(tease.toyName, teaseText(tease, session, now)));
         }
       }
-      if (toys.length === 0) toys.push(`${dot} no toys reported`);
+      if (toys.length === 0) toys.push(text.board.noToys(dot));
 
       return [
-        `**${link.displayName}** · ${userMention(link.discordUserId)}`,
+        text.board.person(link.displayName, link.discordUserId),
         ...toys.map((t) => `> ${t}`),
         `> ${reachability(row)}`,
       ].join('\n');
@@ -115,7 +118,7 @@ export function renderBoardBody(
 }
 
 export function renderBoard(body: string, now = Date.now()): string {
-  const content = `**Shortwave — live status** · updated ${rel(now)}\n\n${body}`;
+  const content = `${text.board.header(now)}\n\n${body}`;
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - 1)}…`;
 }
 

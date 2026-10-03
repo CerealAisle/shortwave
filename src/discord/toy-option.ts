@@ -3,14 +3,15 @@ import { resolveToys, toyChoices, toyLabel, type ToyResolution } from '../lovens
 import type { LovenseToy } from '../lovense/types';
 import type { ToyTease } from '../session/manager';
 import { store, type ToyLink } from '../store/store';
+import { text } from '../text';
 
 /**
- * The optional `toy` argument shared by /tease, /buzz, /pattern and /off.
+ * The optional `toy` argument shared by /tease, /buzz and /pattern.
  * Its suggestions come from the toys of whoever the command targets, so a
  * new toy shows up as soon as its app reports it — no deploy-commands.
  */
 export const TOY_OPTION = 'toy';
-export const TOY_OPTION_DESCRIPTION = 'Which toy (defaults to all of them)';
+export const TOY_OPTION_DESCRIPTION = text.toy.describe;
 
 /**
  * Suggest the target's toys. `userOption` names the command's user option;
@@ -36,8 +37,7 @@ export function toysFromOption(
 
 /** "50% / 1.5s · 12 buzz(es) · 2 missed" */
 export function describeTease(t: ToyTease): string {
-  const missed = t.missedCount > 0 ? ` · ${t.missedCount} missed` : '';
-  return `${t.intensityPercent}% / ${t.durationSec}s · ${t.triggerCount} buzz(es)${missed}`;
+  return text.teaseDetail(t.intensityPercent, t.durationSec, t.triggerCount, t.missedCount);
 }
 
 /** Bold, comma-separated names of teasing toys. */

@@ -1,12 +1,6 @@
-import { MessageFlags, time, userMention, type ChatInputCommandInteraction } from 'discord.js';
-import { sessions, type Lockout } from '../session/manager';
-
-export function describeLockout(lock: Lockout): string {
-  return (
-    `Stopped by ${userMention(lock.by)} — nothing can start ` +
-    `${time(Math.floor(lock.until / 1000), 'R')}`
-  );
-}
+import { MessageFlags, type ChatInputCommandInteraction } from 'discord.js';
+import { sessions } from '../session/manager';
+import { text } from '../text';
 
 /**
  * For commands that would start something: refuse, and say until when, if
@@ -17,7 +11,7 @@ export async function refuseIfStopped(interaction: ChatInputCommandInteraction):
   const lock = interaction.guildId ? sessions.lockout(interaction.guildId) : null;
   if (!lock) return false;
   await interaction.reply({
-    content: `${describeLockout(lock)}.`,
+    content: text.common.stopped(lock.by, lock.until),
     flags: MessageFlags.Ephemeral,
   });
   return true;

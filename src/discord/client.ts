@@ -7,6 +7,7 @@ import {
 } from 'discord.js';
 import { config } from '../config';
 import { log } from '../logger';
+import { text } from '../text';
 import { channelRole } from './channels';
 import { loadCommands } from './registry';
 import { registerMessageTrigger } from './events/message-create';
@@ -49,7 +50,7 @@ export function createClient(): Client {
 
     if (interaction.guildId !== config.DISCORD_GUILD_ID) {
       await interaction.reply({
-        content: 'This bot only works in its configured server.',
+        content: text.common.wrongServer,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -57,7 +58,7 @@ export function createClient(): Client {
 
     if (!channelRole(interaction.channelId)) {
       await interaction.reply({
-        content: 'Commands only work in the main channel or the bot command channel.',
+        content: text.common.wrongChannel,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -73,7 +74,7 @@ export function createClient(): Client {
       await command.execute(interaction);
     } catch (err) {
       log.error(`/${interaction.commandName} threw: ${(err as Error).message}`);
-      const content = 'Something went wrong running that command.';
+      const content = text.common.somethingWentWrong;
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
       } else {

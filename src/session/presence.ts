@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { log } from '../logger';
 import { explainCode } from '../lovense/client';
+import { text } from '../text';
 import { isToyConnected } from '../lovense/toys';
 import type { LovenseToy } from '../lovense/types';
 import { store, type ToyLink } from '../store/store';
@@ -71,13 +72,8 @@ export function diagnose(status: PresenceStatus, now = Date.now()): Diagnosis | 
 
   const backgrounded = result.code === 507 && heartbeatFresh;
   let hint: string | null = null;
-  if (backgrounded) {
-    hint =
-      'looks backgrounded — the app is still checking in, but commands are refused. ' +
-      'Force-quit Lovense Remote and reopen it';
-  } else if (result.code === 507) {
-    hint = 'the app is closed or the phone is offline. Open Lovense Remote';
-  }
+  if (backgrounded) hint = text.hints.backgrounded;
+  else if (result.code === 507) hint = text.hints.appClosed;
 
   return { code: result.code, meaning: explainCode(result.code), hint, backgrounded };
 }
@@ -107,6 +103,12 @@ export class PresenceMonitor {
   private reportedOffline = new Set<string>();
 
   private results = new Map<string, CommandResult>();
+  /**
+   * When each link last answered 200. Kept apart from `results`, which holds
+   * only the latest answer: a network blip or a 400 after a success should
+   * show on the board, but not cost the link its proof of reachability.
+   */
+  private lastOk = new Map<string, number>();
 
   /** Whether heartbeat-based liveness is on. */
   get enabled(): boolean {
@@ -167,15 +169,22 @@ export class PresenceMonitor {
    * works right now, so it also clears any earlier 507.
    */
   noteReachable(uid: string): void {
-    this.results.set(uid, { at: Date.now(), ok: true });
+    const now = Date.now();
+    this.results.set(uid, { at: now, ok: true });
+    this.lastOk.set(uid, now);
     this.reportedOffline.delete(uid);
     this.emitResult(uid, true);
     this.evaluate(uid);
   }
 
-  /** Record a failure that says nothing about reachability (e.g. network). */
-  noteInconclusive(uid: string): void {
-    this.results.set(uid, { at: Date.now(), ok: false });
+  /**
+   * Record a failed command without deciding the link is offline: a network
+   * blip, or a code like 400 that is about the command, not the app. The
+   * status board shows it as the last failure.
+   */
+  noteFailed(uid: string, code: number | undefined): void {
+    this.results.set(uid, { at: Date.now(), ok: false, code });
+    this.emitResult(uid, false);
   }
 
   lastResult(uid: string): CommandResult | null {
@@ -186,6 +195,7 @@ export class PresenceMonitor {
   forget(uid: string): void {
     this.reportedOffline.delete(uid);
     this.results.delete(uid);
+    this.lastOk.delete(uid);
     this.lastKnown.delete(uid);
     this.changedAt.delete(uid);
   }
@@ -225,7 +235,8 @@ export class PresenceMonitor {
     // A recent 200 is the strongest evidence there is, and outranks heartbeat
     // silence. The one thing that overrides it is a fresh heartbeat saying
     // no toy is attached: Lovense accepts commands for the app either way.
-    if (lastResult?.ok && now - lastResult.at <= this.resultFreshMs) {
+    const okAt = this.lastOk.get(link.uid);
+    if (okAt !== undefined && now - okAt <= this.resultFreshMs) {
       const detached = heartbeatsWorking && heartbeatFresh && connectedToys.length === 0;
       return { presence: detached ? 'offline' : 'online', ...base };
     }
