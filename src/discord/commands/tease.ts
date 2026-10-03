@@ -3,7 +3,15 @@ import { config } from '../../config';
 import { makeUid } from '../../lovense/client';
 import { sessions } from '../../session/manager';
 import { presence } from '../../session/presence';
+import { toyLabel } from '../../lovense/toys';
 import { store } from '../../store/store';
+import {
+  TOY_OPTION,
+  TOY_OPTION_DESCRIPTION,
+  names,
+  respondWithToys,
+  toysFromOption,
+} from '../toy-option';
 import type { BotCommand } from '../types';
 
 /**
@@ -14,14 +22,19 @@ import type { BotCommand } from '../types';
  * worn, not a command. That is also why /off and /stop are never gated: what
  * this starts, the wearer can always end.
  *
- * Running it while tease is already on retunes the strength and length in
- * place rather than starting over.
+ * Without `toy` it covers every connected toy; with it, just that one, so
+ * two toys can tease at different strengths. Running it again for a toy
+ * already teasing retunes the strength and length in place rather than
+ * starting over.
  */
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('tease')
     .setDescription('Tease mode: messages from anyone else in the main channel buzz the toy')
     .addUserOption((o) => o.setName('user').setDescription('Whose toy (defaults to yours)'))
+    .addStringOption((o) =>
+      o.setName(TOY_OPTION).setDescription(TOY_OPTION_DESCRIPTION).setAutocomplete(true),
+    )
     .addIntegerOption((o) =>
       o
         .setName('intensity')
@@ -36,6 +49,10 @@ export const command: BotCommand = {
         .setMinValue(1)
         .setMaxValue(30),
     ),
+
+  async autocomplete(interaction) {
+    await respondWithToys(interaction, 'user');
+  },
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -77,23 +94,27 @@ export const command: BotCommand = {
       return;
     }
 
+    const toys = toysFromOption(interaction, link);
+    if (!toys.ok) {
+      await interaction.reply({
+        content: `Cannot start tease: ${toys.error}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     const intensity = interaction.options.getInteger('intensity') ?? undefined;
     const duration = interaction.options.getNumber('duration') ?? undefined;
 
-    const existing = sessions.get(interaction.guildId, target.id);
-    const session = existing
-      ? sessions.retune(interaction.guildId, target.id, {
-          intensityPercent: intensity,
-          durationSec: duration,
-        })!
-      : sessions.arm({
-          uid: makeUid(interaction.guildId, target.id),
-          guildId: interaction.guildId,
-          ownerId: target.id,
-          startedBy: interaction.user.id,
-          intensityPercent: intensity,
-          durationSec: duration,
-        });
+    const { added, updated } = sessions.arm({
+      uid: makeUid(interaction.guildId, target.id),
+      guildId: interaction.guildId,
+      ownerId: target.id,
+      toys: toys.toys.map((t) => ({ id: t.id, name: toyLabel(t) })),
+      startedBy: interaction.user.id,
+      intensityPercent: intensity,
+      durationSec: duration,
+    });
 
     const heartbeatWarning =
       presence.enabled && !status.heartbeatsWorking && !status.lastResult?.ok
@@ -105,11 +126,17 @@ export const command: BotCommand = {
         ? ` No auto-off; a reminder posts every ${config.TEASE_REMINDER_MINUTES} minutes.`
         : ' No auto-off.';
 
+    const whoseToys = self ? 'your' : `${target.displayName}'s`;
+    const changes = [
+      ...added.map((t) => `**Tease on**: ${t.toyName} at ${t.intensityPercent}% for ${t.durationSec}s`),
+      ...updated.map((t) => `**Tease updated**: ${t.toyName} now ${t.intensityPercent}% for ${t.durationSec}s`),
+    ];
+
     await interaction.reply({
       content:
-        `**Tease ${existing ? 'updated' : 'on'}** for ${self ? 'your' : `${target.displayName}'s`} toy. ` +
-        `Messages from anyone else in ${channelMention(config.MAIN_CHANNEL_ID)} ` +
-        `buzz at ${session.intensityPercent}% for ${session.durationSec}s.\n` +
+        `${changes.join('\n')}\n` +
+        `Messages from anyone else in ${channelMention(config.MAIN_CHANNEL_ID)} buzz ${whoseToys} ` +
+        `${names([...added, ...updated])}.\n` +
         `\`/off\` turns it off, \`/stop\` halts everything.${reminder}` +
         heartbeatWarning,
     });

@@ -1,29 +1,44 @@
 import { EmbedBuilder, SlashCommandBuilder, time, userMention } from 'discord.js';
-import { sessions } from '../../session/manager';
+import { toyLabel } from '../../lovense/toys';
+import { sessions, type Session, type ToyTease } from '../../session/manager';
 import { isToyConnected, presence } from '../../session/presence';
-import { store } from '../../store/store';
+import { store, type ToyLink } from '../../store/store';
+import { describeTease } from '../toy-option';
 import type { BotCommand } from '../types';
 
-function sessionLine(session: ReturnType<typeof sessions.get>): string {
-  if (!session) return 'Tease off';
+/** One line per toy: battery, connection, and its tease if any. */
+function toyLines(link: ToyLink, session: Session | undefined): string[] {
+  const paused = session?.state === 'suspended';
+  const lines = link.toys.map((t) => {
+    const battery = t.battery !== undefined ? ` ${t.battery}%` : '';
+    const mark = isToyConnected(t) ? '' : ' — disconnected';
+    const tease = session?.toys.get(t.id);
+    return `• ${toyLabel(t)}${battery}${mark} — ${teaseText(tease, session, paused)}`;
+  });
 
-  const label =
-    session.state === 'suspended' ? '**Tease paused** (toy offline)' : '**Tease on**';
-  const missed = session.missedCount > 0 ? ` · ${session.missedCount} missed` : '';
-  const by =
-    session.startedBy === session.ownerId ? '' : ` by ${userMention(session.startedBy)}`;
+  // A toy still teasing that its app no longer lists (removed in the app).
+  for (const tease of session?.toys.values() ?? []) {
+    if (!link.toys.some((t) => t.id === tease.toyId)) {
+      lines.push(`• ${tease.toyName} — not reported by the app — ${teaseText(tease, session, paused)}`);
+    }
+  }
 
+  return lines.length > 0 ? lines : ['• none reported yet'];
+}
+
+function teaseText(tease: ToyTease | undefined, session: Session | undefined, paused: boolean): string {
+  if (!tease || !session) return 'tease off';
+  const by = tease.startedBy === session.ownerId ? '' : ` by ${userMention(tease.startedBy)}`;
   return (
-    `${label} at ${session.intensityPercent}% / ${session.durationSec}s · ` +
-    `${session.triggerCount} buzz(es)${missed} · ` +
-    `started ${time(Math.floor(session.armedAt / 1000), 'R')}${by}`
+    `${paused ? '**tease paused** (toy offline)' : '**tease on**'} at ${describeTease(tease)} · ` +
+    `started ${time(Math.floor(tease.armedAt / 1000), 'R')}${by}`
   );
 }
 
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('status')
-    .setDescription('Show linked toys and whether tease is on'),
+    .setDescription('Show linked toys and which have tease on'),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
@@ -41,17 +56,6 @@ export const command: BotCommand = {
       const session = sessions.get(interaction.guildId, link.discordUserId);
       const status = presence.statusFor(link);
 
-      const toyNames =
-        link.toys.length > 0
-          ? link.toys
-              .map((t) => {
-                const battery = t.battery !== undefined ? ` ${t.battery}%` : '';
-                const mark = isToyConnected(t) ? '' : ' — disconnected';
-                return `${t.nickName || t.name}${battery}${mark}`;
-              })
-              .join(', ')
-          : 'none reported yet';
-
       const presenceLabel = {
         online: '🟢 Online',
         offline: '🔴 Offline',
@@ -64,12 +68,11 @@ export const command: BotCommand = {
             ? ' (no heartbeats — enable heartbeat in the Lovense dashboard)'
             : ''
         }`,
-        `Toys: ${toyNames}`,
         `App: ${link.platform ?? 'unknown'}`,
         link.lastSeen
           ? `Last heartbeat: ${time(Math.floor(link.lastSeen / 1000), 'R')}`
           : 'Last heartbeat: never — QR not scanned yet',
-        sessionLine(session),
+        ...toyLines(link, session),
       ];
 
       embed.addFields({

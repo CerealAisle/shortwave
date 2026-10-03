@@ -215,7 +215,7 @@ targets all of a user's toys until phase 6.
 Touches: new `src/lovense/patterns.ts` and a `patterns/` directory, new
 `pattern.ts` command.
 
-### 6. Multiple toys — *blocked on hardware*
+### 6. Multiple toys — *built; not yet tested with two real toys*
 
 Toys become addressable by name; sessions key on `(guild, owner, toyId)`
 instead of `(guild, owner)`. Every command gains an optional toy argument
@@ -229,6 +229,35 @@ Do it as one deliberate change on a branch. Half the commands taking a toy
 argument and half not is worse than either end state.
 
 Touches: `store.ts` (schema migration), `manager.ts`, every command.
+
+**As built**, with two departures from the plan above:
+
+- **No schema migration.** A link is one Lovense Remote app, and every toy
+  paired to it already arrives in each callback and is stored with the link.
+  That is all toy addressing needs; a separate toys table would duplicate it.
+- **Two levels instead of re-keying the session.** The session stays per
+  `(guild, owner)` and holds a `ToyTease` per toy. Pause, the grace window,
+  the rate limit and the reminder are properties of the phone, which carries
+  every toy at once, so they stay per person. Strength, length, who started it
+  and the counts are per toy — effectively keyed on `(guild, owner, toyId)`.
+
+`toy` is optional on `/tease`, `/buzz`, `/pattern` and `/off`, and
+autocompletes from the target's toys. `/stop` deliberately has none. When all
+of a person's toys tease at the same settings, a trigger is still one
+untargeted command — exactly what a one-toy setup sent before — and only
+diverging settings produce one command per toy.
+
+**Check with two real toys before relying on it:**
+
+1. Both toys appear on the status board and in the `toy` suggestions.
+2. `/buzz toy:<one>` moves only that toy.
+3. `/tease toy:<one> intensity:20`, then `/tease toy:<other> intensity:80`:
+   one message buzzes both, each at its own strength, and neither command
+   cuts the other short.
+4. `/off toy:<one>` stops only that toy; the other keeps teasing.
+5. Switch one toy off: the board marks it ⚫ disconnected while the other
+   stays 🟢.
+6. `/stop` halts both.
 
 ---
 

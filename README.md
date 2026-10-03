@@ -97,6 +97,7 @@ src/
 │   ├── types.ts                ToyAction union + API payload types
 │   ├── actions.ts              action builders; percent→level conversion
 │   ├── patterns.ts             loads and validates patterns/*.json
+│   ├── toys.ts                 toy names, lookup and suggestions
 │   └── client.ts               HTTP transport, uid/utoken derivation, errors
 │
 ├── store/
@@ -118,6 +119,7 @@ src/
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── status-board.ts         pinned live-status post in the command channel
+    ├── toy-option.ts           the shared `toy` option and its autocomplete
     ├── events/message-create.ts  the trigger path
     └── commands/               one file per slash command
 ```
@@ -318,15 +320,24 @@ Every command replies in the channel it was run in.
 | Command | Who | What it does |
 |---|---|---|
 | `/connect` | anyone | Ephemeral QR code to link your own toy |
-| `/tease [user] [intensity] [duration]` | anyone | Tease on: others' messages buzz the toy. No expiry. Re-run while on to change strength or length |
-| `/off` | toy owner | Turn tease off on your toy and stop it. Never gated |
+| `/tease [user] [toy] [intensity] [duration]` | anyone | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length |
+| `/off [toy]` | toy owner | Turn tease off on your toys (or one of them) and stop them. Never gated |
 | `/stop` | anyone | Safeword: stop all toys, turn tease off for everyone. Never gated |
 | `/status` | anyone | Linked toys, battery, tease state, trigger counts |
-| `/buzz <intensity> <seconds> [target]` | anyone | One-off manual vibration |
-| `/pattern <name> [target]` | anyone | Play a named pattern from `patterns/`. The name autocompletes |
+| `/buzz <intensity> <seconds> [target] [toy]` | anyone | One-off manual vibration |
+| `/pattern <name> [target] [toy]` | anyone | Play a named pattern from `patterns/`. The name autocompletes |
 | `/disconnect` | toy owner | Delete your link from the bot |
 
 `/connect` replies ephemerally because the QR code is a control credential.
+
+**More than one toy.** Every toy paired to a person's Lovense Remote app is
+listed under them, and `toy` picks one by nickname or model — it
+autocompletes from that person's toys. Leave it out and `/buzz` and
+`/pattern` go to all of them, `/tease` covers every connected toy, and `/off`
+turns all of yours off. Tease strength, length and counts are per toy, so two
+toys can tease at different strengths; pausing is per person, because one
+phone carries all their toys. `/stop` has no toy option: it is the safeword
+and always stops everything.
 The pinned status post in the command channel is the ambient view; `/status`
 is the on-demand one.
 

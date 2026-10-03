@@ -10,9 +10,11 @@ import {
 } from 'discord.js';
 import { config } from '../config';
 import { log } from '../logger';
-import type { Session } from '../session/manager';
+import { toyLabel } from '../lovense/toys';
+import type { Session, ToyTease } from '../session/manager';
 import { isToyConnected, type PresenceStatus } from '../session/presence';
 import type { ToyLink } from '../store/store';
+import { describeTease } from './toy-option';
 
 /** Minimum gap between edits. A flapping toy coalesces into one edit. */
 const MIN_EDIT_GAP_MS = 15_000;
@@ -54,14 +56,10 @@ function reachability(row: BoardRow): string {
   }
 }
 
-function sessionLine(session: Session | undefined, now: number): string {
-  if (!session) return 'tease off';
+function teaseText(tease: ToyTease | undefined, session: Session | undefined, now: number): string {
+  if (!tease || !session) return 'tease off';
   const label = session.state === 'suspended' ? 'tease paused (toy offline)' : 'tease on';
-  const missed = session.missedCount > 0 ? ` · ${session.missedCount} missed` : '';
-  return (
-    `${label} at ${session.intensityPercent}% / ${session.durationSec}s · ` +
-    `${session.triggerCount} buzz(es)${missed} · ${formatDuration(now - session.armedAt)}`
-  );
+  return `${label} at ${describeTease(tease)} · ${formatDuration(now - tease.armedAt)}`;
 }
 
 /**
@@ -74,22 +72,32 @@ export function renderBoardBody(rows: BoardRow[], now = Date.now()): string {
 
   return rows
     .map((row) => {
-      const { link, status } = row;
+      const { link, status, session } = row;
       const dot = { online: '🟢', offline: '🔴', unknown: '⚪' }[status.presence];
-      const toys =
-        link.toys.length > 0
-          ? link.toys.map((t) => {
-              const battery = t.battery !== undefined ? ` · ${t.battery}%` : '';
-              const mark = isToyConnected(t) ? '' : ' · disconnected';
-              return `${dot} ${t.nickName || t.name}${battery}${mark}`;
-            })
-          : [`${dot} no toys reported`];
+
+      // One line per toy, each with its own tease state. A toy the app says
+      // is disconnected gets its own mark: the phone can be fine while one
+      // toy's Bluetooth has dropped.
+      const toys = link.toys.map((t) => {
+        const battery = t.battery !== undefined ? ` · ${t.battery}%` : '';
+        const connected = isToyConnected(t);
+        const mark = connected ? '' : ' · disconnected';
+        const tease = teaseText(session?.toys.get(t.id), session, now);
+        return `${connected ? dot : '⚫'} ${toyLabel(t)}${battery}${mark} — ${tease}`;
+      });
+
+      // Still teasing, but the app no longer lists it.
+      for (const tease of session?.toys.values() ?? []) {
+        if (!link.toys.some((t) => t.id === tease.toyId)) {
+          toys.push(`⚫ ${tease.toyName} · not reported — ${teaseText(tease, session, now)}`);
+        }
+      }
+      if (toys.length === 0) toys.push(`${dot} no toys reported`);
 
       return [
         `**${link.displayName}** · ${userMention(link.discordUserId)}`,
         ...toys.map((t) => `> ${t}`),
         `> ${reachability(row)}`,
-        `> ${sessionLine(row.session, now)}`,
       ].join('\n');
     })
     .join('\n\n');
