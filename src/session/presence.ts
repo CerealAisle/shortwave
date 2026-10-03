@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { log } from '../logger';
+import { isToyConnected } from '../lovense/toys';
 import type { LovenseToy } from '../lovense/types';
 import { store, type ToyLink } from '../store/store';
 
@@ -45,9 +46,8 @@ export type PresenceTransitionListener = (payload: {
   to: Presence;
 }) => void;
 
-export function isToyConnected(toy: LovenseToy): boolean {
-  return String(toy.status) === '1';
-}
+// Lives with the other toy helpers; re-exported for existing callers.
+export { isToyConnected };
 
 export class PresenceMonitor {
   private lastKnown = new Map<string, Presence>();

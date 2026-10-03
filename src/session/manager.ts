@@ -8,8 +8,16 @@ import { presence } from './presence';
 import { RateLimiter } from './rate-limiter';
 
 /**
- * A session is tease mode: while it exists, messages from anyone else in the
- * main channel buzz the owner's toy.
+ * A session is tease mode for one person: while it exists, messages from
+ * anyone else in the main channel buzz the toys it lists.
+ *
+ * Two levels, because two things vary at different grains:
+ *  - The session (per guild + owner) holds what is true of the phone:
+ *    paused or not, the grace window, the rate limit and the reminder. One
+ *    Lovense Remote app carries all of a person's toys, so when it drops,
+ *    they all drop together.
+ *  - Each ToyTease (per toy within it) holds what can differ between toys:
+ *    strength, length, who started it, and its counts.
  *
  * `armed`     - triggers fire.
  * `suspended` - the toy went offline; triggers are ignored, but the session
@@ -23,16 +31,27 @@ import { RateLimiter } from './rate-limiter';
  */
 export type SessionState = 'armed' | 'suspended';
 
+export interface ToyTease {
+  toyId: string;
+  /** Label at the time tease started, for messages if the toy later vanishes. */
+  toyName: string;
+  /** Who ran `/tease` for this toy. Often not the owner. */
+  startedBy: string;
+  intensityPercent: number;
+  durationSec: number;
+  armedAt: number;
+  triggerCount: number;
+  /** Triggers dropped because the toy was offline or the session suspended. */
+  missedCount: number;
+}
+
 export interface Session {
   uid: string;
   guildId: string;
-  /** Discord user who owns the toy. Their own messages never trigger it. */
+  /** Discord user who owns the toys. Their own messages never trigger them. */
   ownerId: string;
-  /** Who ran `/tease`. Often not the owner. */
-  startedBy: string;
   state: SessionState;
-  intensityPercent: number;
-  durationSec: number;
+  /** When the first toy in this session started. */
   armedAt: number;
   suspendedAt: number | null;
   limiter: RateLimiter;
@@ -40,9 +59,24 @@ export interface Session {
   lastReminderAt: number;
   reminderTimer: NodeJS.Timeout | null;
   graceTimer: NodeJS.Timeout | null;
-  triggerCount: number;
-  /** Triggers dropped because the toy was offline or the session suspended. */
-  missedCount: number;
+  /** Keyed by toy ID, in the order tease started on them. Never empty. */
+  toys: Map<string, ToyTease>;
+}
+
+/** Buzzes and misses summed over every toy in the session. */
+export function sessionTotals(session: Session): { buzzes: number; missed: number } {
+  let buzzes = 0;
+  let missed = 0;
+  for (const t of session.toys.values()) {
+    buzzes += t.triggerCount;
+    missed += t.missedCount;
+  }
+  return { buzzes, missed };
+}
+
+export interface ToyRef {
+  id: string;
+  name: string;
 }
 
 export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
@@ -70,6 +104,32 @@ export function shouldPostReminder(
     session.suspendedAt !== null &&
     session.suspendedAt <= session.lastReminderAt
   );
+}
+
+/**
+ * Which commands a trigger turns into. When every teased toy shares one
+ * strength and length and they are all of the link's toys, that is a single
+ * command with no toy ID — exactly what a one-toy setup has always sent.
+ * Otherwise one command per toy, each at its own settings.
+ */
+export function planTriggerSends(
+  teases: ToyTease[],
+  linkToyIds: string[],
+): { toyId: string | undefined; teases: ToyTease[] }[] {
+  const first = teases[0];
+  if (!first) return [];
+
+  const uniform = teases.every(
+    (t) => t.intensityPercent === first.intensityPercent && t.durationSec === first.durationSec,
+  );
+  const teased = new Set(teases.map((t) => t.toyId));
+  const coversLink =
+    linkToyIds.length > 0 &&
+    linkToyIds.length === teased.size &&
+    linkToyIds.every((id) => teased.has(id));
+
+  if (uniform && coversLink) return [{ toyId: undefined, teases }];
+  return teases.map((t) => ({ toyId: t.toyId, teases: [t] }));
 }
 
 /**
@@ -140,60 +200,74 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.guildId === guildId);
   }
 
-  /** Start tease. Re-arming replaces the old session rather than stacking on it. */
+  /**
+   * Start tease on some of a person's toys. Toys already teasing are retuned
+   * in place — only the strength and length given change, and their counts
+   * carry on — so running /tease again adjusts rather than restarts.
+   */
   arm(params: {
     uid: string;
     guildId: string;
     ownerId: string;
+    toys: ToyRef[];
     startedBy?: string;
     intensityPercent?: number;
     durationSec?: number;
-  }): Session {
-    this.disarm(params.guildId, params.ownerId, { silent: true });
+  }): { session: Session; added: ToyTease[]; updated: ToyTease[] } {
+    if (params.toys.length === 0) throw new Error('arm needs at least one toy');
 
     const now = Date.now();
+    const key = this.key(params.guildId, params.ownerId);
+    let session = this.sessions.get(key);
 
-    const session: Session = {
-      uid: params.uid,
-      guildId: params.guildId,
-      ownerId: params.ownerId,
-      startedBy: params.startedBy ?? params.ownerId,
-      state: 'armed',
-      intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
-      durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,
-      armedAt: now,
-      suspendedAt: null,
-      limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
-      triggerCount: 0,
-      missedCount: 0,
-      lastReminderAt: now,
-      reminderTimer: null,
-      graceTimer: null,
-    };
+    if (!session) {
+      session = {
+        uid: params.uid,
+        guildId: params.guildId,
+        ownerId: params.ownerId,
+        state: 'armed',
+        armedAt: now,
+        suspendedAt: null,
+        limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
+        lastReminderAt: now,
+        reminderTimer: null,
+        graceTimer: null,
+        toys: new Map(),
+      };
+      this.sessions.set(key, session);
+      this.scheduleReminder(session);
+    }
 
-    this.sessions.set(this.key(params.guildId, params.ownerId), session);
-    this.scheduleReminder(session);
-    log.info(`Tease on for ${params.ownerId} (started by ${session.startedBy})`);
-    return session;
-  }
+    const added: ToyTease[] = [];
+    const updated: ToyTease[] = [];
 
-  /**
-   * Change a running tease's strength or length without resetting it: the
-   * buzz count, elapsed time and reminder schedule all carry on.
-   */
-  retune(
-    guildId: string,
-    ownerId: string,
-    params: { intensityPercent?: number; durationSec?: number },
-  ): Session | undefined {
-    const session = this.sessions.get(this.key(guildId, ownerId));
-    if (!session) return undefined;
-    if (params.intensityPercent !== undefined) session.intensityPercent = params.intensityPercent;
-    if (params.durationSec !== undefined) session.durationSec = params.durationSec;
+    for (const toy of params.toys) {
+      const existing = session.toys.get(toy.id);
+      if (existing) {
+        if (params.intensityPercent !== undefined) existing.intensityPercent = params.intensityPercent;
+        if (params.durationSec !== undefined) existing.durationSec = params.durationSec;
+        updated.push(existing);
+        continue;
+      }
+      const tease: ToyTease = {
+        toyId: toy.id,
+        toyName: toy.name,
+        startedBy: params.startedBy ?? params.ownerId,
+        intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
+        durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,
+        armedAt: now,
+        triggerCount: 0,
+        missedCount: 0,
+      };
+      session.toys.set(toy.id, tease);
+      added.push(tease);
+    }
+
     log.info(
-      `Tease retuned for ${ownerId}: ${session.intensityPercent}% / ${session.durationSec}s`,
+      `Tease for ${params.ownerId}: ${added.length} toy(s) on, ${updated.length} retuned ` +
+        `(by ${params.startedBy ?? params.ownerId})`,
     );
-    return session;
+    return { session, added, updated };
   }
 
   /**
@@ -281,27 +355,50 @@ export class SessionManager {
     return session;
   }
 
-  /** Disarm and send a Stop. Always safe to call, armed or not. */
+  /**
+   * Turn tease off and send a Stop. Always safe to call, armed or not.
+   *
+   * With `toyIds`, only those toys stop and the rest keep teasing; the
+   * session ends when its last toy does. Without, every toy stops.
+   */
   disarm(
     guildId: string,
     ownerId: string,
-    opts: { silent?: boolean } = {},
-  ): Session | undefined {
-    const session = this.sessions.get(this.key(guildId, ownerId));
+    opts: { silent?: boolean; toyIds?: string[] } = {},
+  ): { session: Session; removed: ToyTease[]; ended: boolean } | undefined {
+    const key = this.key(guildId, ownerId);
+    const session = this.sessions.get(key);
     if (!session) return undefined;
 
-    this.clearTimers(session);
-    this.sessions.delete(this.key(guildId, ownerId));
+    const all = opts.toyIds === undefined;
+    const removed: ToyTease[] = [];
+    for (const [id, tease] of session.toys) {
+      if (all || opts.toyIds!.includes(id)) removed.push(tease);
+    }
+    for (const t of removed) session.toys.delete(t.toyId);
 
-    if (!opts.silent) {
-      log.info(`Session disarmed for ${ownerId} (${session.triggerCount} triggers)`);
+    const ended = session.toys.size === 0;
+    if (ended) {
+      this.clearTimers(session);
+      this.sessions.delete(key);
     }
 
-    void this.sendNow(session.uid, actions.stop(), 'disarm').catch((err) => {
-      log.warn(`Stop after disarm failed: ${(err as Error).message}`);
-    });
+    if (!opts.silent && removed.length > 0) {
+      log.info(`Tease off for ${ownerId}: ${removed.length} toy(s)${ended ? ', session ended' : ''}`);
+    }
 
-    return session;
+    const onStopFailed = (err: Error) => log.warn(`Stop after disarm failed: ${err.message}`);
+    if (all) {
+      void this.sendNow(session.uid, actions.stop(), 'disarm').catch(onStopFailed);
+    } else {
+      for (const t of removed) {
+        void this.sendNow(session.uid, actions.stop(), 'disarm', { toyId: t.toyId }).catch(
+          onStopFailed,
+        );
+      }
+    }
+
+    return { session, removed, ended };
   }
 
   /** Panic path: disarm every session in the guild and stop every toy. */
@@ -331,8 +428,11 @@ export class SessionManager {
     session: Session,
     source: string,
   ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'failed'> {
+    const teases = [...session.toys.values()];
+    const missAll = () => teases.forEach((t) => (t.missedCount += 1));
+
     if (session.state === 'suspended') {
-      session.missedCount += 1;
+      missAll();
       return 'suspended';
     }
 
@@ -341,28 +441,36 @@ export class SessionManager {
     // doomed requests in the meantime.
     const status = presence.statusForUid(session.uid);
     if (status?.presence === 'offline') {
-      session.missedCount += 1;
+      missAll();
       log.debug(`Trigger skipped for ${session.ownerId}: toy offline`);
       return 'offline';
     }
 
+    // One slot per message, however many toys it buzzes.
     const gate = session.limiter.tryAcquire();
     if (!gate.allowed) {
       log.debug(`Trigger throttled (${gate.reason}) for ${session.ownerId}`);
       return 'throttled';
     }
 
-    const action = actions.vibrate(session.intensityPercent, session.durationSec);
+    const linkToyIds = store.getByUid(session.uid)?.toys.map((t) => t.id) ?? [];
+    const results = await Promise.allSettled(
+      planTriggerSends(teases, linkToyIds).map(async ({ toyId, teases: group }) => {
+        const action = actions.vibrate(group[0]!.intensityPercent, group[0]!.durationSec);
+        try {
+          await this.sendWithWakeRetry(session.uid, action, source, toyId);
+          group.forEach((t) => (t.triggerCount += 1));
+        } catch (err) {
+          group.forEach((t) => (t.missedCount += 1));
+          throw err;
+        }
+      }),
+    );
 
-    try {
-      await this.sendWithWakeRetry(session.uid, action, source);
-      session.triggerCount += 1;
-      return 'sent';
-    } catch (err) {
-      session.missedCount += 1;
-      this.emitError(session, err as Error);
-      return 'failed';
-    }
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    // One notice per trigger, not one per toy.
+    if (failures.length > 0) this.emitError(session, failures[0]!.reason as Error);
+    return failures.length < results.length ? 'sent' : 'failed';
   }
 
   /**
@@ -377,6 +485,7 @@ export class SessionManager {
     uid: string,
     action: ToyAction,
     source: string,
+    toyId?: string,
   ): Promise<void> {
     let lastError: unknown;
 
@@ -384,6 +493,7 @@ export class SessionManager {
       try {
         await this.sendNow(uid, action, attempt === 0 ? source : `${source}:retry${attempt}`, {
           deferOfflineReport: true,
+          toyId,
         });
         return;
       } catch (err) {
@@ -434,21 +544,25 @@ export class SessionManager {
   /**
    * The one place commands leave the process. Manual commands go through here
    * too, so they get the same logging and error mapping.
+   *
+   * `toyId` addresses one toy; without it, every toy on the link.
    */
   async sendNow(
     uid: string,
     action: ToyAction,
     source: string,
-    opts: { deferOfflineReport?: boolean } = {},
+    opts: { deferOfflineReport?: boolean; toyId?: string } = {},
   ): Promise<void> {
-    const description = describeAction(action);
+    const description = describeAction(action) + (opts.toyId ? ` [toy ${opts.toyId}]` : '');
     const isProbe = source.startsWith('probe');
     const previousRunningUntil = this.runningUntil.get(uid);
 
     // Marked before the request goes out, so a probe can't slip in while
-    // this one is still in flight.
+    // this one is still in flight. Tracked per link, not per toy, because
+    // the probe goes to every toy: stopping one toy says nothing about the
+    // others, so only a Stop to all of them clears it.
     if (action.kind === 'function' && action.action === 'Stop') {
-      this.runningUntil.delete(uid);
+      if (!opts.toyId) this.runningUntil.delete(uid);
     } else {
       this.runningUntil.set(
         uid,
@@ -457,7 +571,7 @@ export class SessionManager {
     }
 
     try {
-      await lovense.send(uid, action);
+      await lovense.send(uid, action, opts.toyId);
       store.logCommand({ uid, description, source, ok: true });
       // Any 200 is proof the path works, whatever the command was.
       presence.noteReachable(uid);

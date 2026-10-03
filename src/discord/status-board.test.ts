@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Session } from '../session/manager';
+import type { Session, ToyTease } from '../session/manager';
 import type { PresenceStatus } from '../session/presence';
 import { RateLimiter } from '../session/rate-limiter';
 import type { ToyLink } from '../store/store';
@@ -43,23 +43,33 @@ function row(over: Partial<BoardRow> = {}, status: Partial<PresenceStatus> = {})
   };
 }
 
-function session(over: Partial<Session> = {}): Session {
+function tease(over: Partial<ToyTease> = {}): ToyTease {
+  return {
+    toyId: 't1',
+    toyName: 'Lush 3',
+    startedBy: '222',
+    intensityPercent: 50,
+    durationSec: 1.5,
+    armedAt: NOW - (2 * 60 + 14) * 60_000,
+    triggerCount: 12,
+    missedCount: 0,
+    ...over,
+  };
+}
+
+function session(over: Partial<Session> = {}, teases: ToyTease[] = [tease()]): Session {
   return {
     uid: 'g:u',
     guildId: 'g',
     ownerId: '111',
-    startedBy: '222',
     state: 'armed',
-    intensityPercent: 50,
-    durationSec: 1.5,
     armedAt: NOW - (2 * 60 + 14) * 60_000,
     suspendedAt: null,
     limiter: new RateLimiter(0, 100),
     lastReminderAt: NOW,
     reminderTimer: null,
     graceTimer: null,
-    triggerCount: 12,
-    missedCount: 0,
+    toys: new Map(teases.map((t) => [t.toyId, t])),
     ...over,
   };
 }
@@ -110,6 +120,38 @@ describe('renderBoardBody', () => {
 
   it('says so when nothing is linked', () => {
     assert.match(renderBoardBody([], NOW), /No toys linked/);
+  });
+});
+
+describe('renderBoardBody with two toys', () => {
+  const two = (sess?: Session) =>
+    row({
+      link: {
+        ...row().link,
+        toys: [
+          { id: 't1', name: 'lush', nickName: 'Lush 3', status: '1', battery: 87 },
+          { id: 't2', name: 'hush', nickName: 'Hush 2', status: '0', battery: 41 },
+        ],
+      },
+      session: sess,
+    });
+
+  it('gives each toy its own line and its own tease state', () => {
+    const body = renderBoardBody([two(session())], NOW);
+    assert.match(body, /🟢 Lush 3 · 87% — tease on at 50%/);
+    assert.match(body, /Hush 2 · 41% · disconnected — tease off/);
+  });
+
+  it('marks a disconnected toy even while the phone is reachable', () => {
+    const body = renderBoardBody([two()], NOW);
+    assert.match(body, /⚫ Hush 2/);
+    assert.doesNotMatch(body, /🟢 Hush 2/);
+  });
+
+  it('still shows a teasing toy the app has stopped listing', () => {
+    const gone = tease({ toyId: 'gone', toyName: 'Old Toy' });
+    const body = renderBoardBody([two(session({}, [tease(), gone]))], NOW);
+    assert.match(body, /Old Toy · not reported — tease on/);
   });
 });
 

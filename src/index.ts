@@ -6,6 +6,7 @@ import { StatusBoard } from './discord/status-board';
 import { startCallbackServer } from './http/callback';
 import { LovenseError } from './lovense/client';
 import { sessions } from './session/manager';
+import { describeTease } from './discord/toy-option';
 import { presence } from './session/presence';
 import { prober } from './session/prober';
 import { store } from './store/store';
@@ -104,15 +105,14 @@ async function main() {
               : status?.presence === 'offline'
                 ? '🔴 unreachable'
                 : '⚪ reachability unknown';
-        const startedBy =
-          session.startedBy === session.ownerId ? '' : ` by <@${session.startedBy}>`;
+        const toys = [...session.toys.values()].map((t) => {
+          const by = t.startedBy === session.ownerId ? '' : ` · started by <@${t.startedBy}>`;
+          return `• ${t.toyName}: ${describeTease(t)}${by}`;
+        });
         void notify(
           client,
-          `**Tease still on** for ${who} — started ${time(Math.floor(session.armedAt / 1000), 'R')}${startedBy}.
-` +
-            `${session.triggerCount} buzz(es) at ${session.intensityPercent}% / ${session.durationSec}s` +
-            (session.missedCount > 0 ? ` · ${session.missedCount} missed` : '') +
-            ` · ${reach}`,
+          `**Tease still on** for ${who} — since ${time(Math.floor(session.armedAt / 1000), 'R')} · ${reach}\n` +
+            toys.join('\n'),
           { ping: false },
         );
         break;
@@ -141,13 +141,17 @@ async function main() {
         );
         break;
       }
-      case 'resumed':
+      case 'resumed': {
+        // Every teasing toy misses the same messages while paused, so the
+        // largest count is the number of messages, not their sum.
+        const missed = Math.max(0, ...[...session.toys.values()].map((t) => t.missedCount));
         void notify(
           client,
           `${who}'s toy is back — session **resumed**.` +
-            (session.missedCount > 0 ? ` ${session.missedCount} message(s) missed.` : ''),
+            (missed > 0 ? ` ${missed} message(s) missed.` : ''),
         );
         break;
+      }
       case 'grace-expired':
         void notify(
           client,

@@ -6,7 +6,13 @@ import { command as stop } from '../discord/commands/stop';
 import { LovenseError, lovense, makeUid } from '../lovense/client';
 import type { ToyAction } from '../lovense/types';
 import { store } from '../store/store';
-import { sessions, shouldPostReminder, type Session } from './manager';
+import {
+  planTriggerSends,
+  sessions,
+  shouldPostReminder,
+  type Session,
+  type ToyTease,
+} from './manager';
 
 /**
  * The rule these guard: commands that increase stimulation may be
@@ -24,18 +30,22 @@ const OTHER = 'other';
 const WEARER_UID = makeUid(GUILD, WEARER);
 const OTHER_UID = makeUid(GUILD, OTHER);
 
-let sent: { uid: string; action: ToyAction }[] = [];
+const LUSH = { id: 'lush1', name: 'Lush' };
+const HUSH = { id: 'hush1', name: 'Hush' };
+
+let sent: { uid: string; action: ToyAction; toyId?: string }[] = [];
 let failWith: Error | null = null;
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-const stopsTo = (uid: string) =>
-  sent.filter((c) => c.uid === uid && c.action.kind === 'function' && c.action.action === 'Stop');
+const isStop = (a: ToyAction) => a.kind === 'function' && a.action === 'Stop';
+const stopsTo = (uid: string) => sent.filter((c) => c.uid === uid && isStop(c.action));
+const vibrations = () => sent.filter((c) => !isStop(c.action));
 
 beforeEach(() => {
   sent = [];
   failWith = null;
-  mock.method(lovense, 'send', async (uid: string, action: ToyAction) => {
-    sent.push({ uid, action });
+  mock.method(lovense, 'send', async (uid: string, action: ToyAction, toyId?: string) => {
+    sent.push({ uid, action, toyId });
     if (failWith) throw failWith;
   });
   store.createLink(WEARER_UID, GUILD, WEARER, 'wearer');
@@ -52,21 +62,42 @@ after(() => {
   store.deleteLink(OTHER_UID);
 });
 
-function armWearer() {
-  return sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER });
+function armWearer(toys = [LUSH], extra: { startedBy?: string; intensityPercent?: number } = {}) {
+  return sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER, toys, ...extra });
 }
 
 describe('the wearer can always stop', () => {
   it('ends tease someone else started on their toy', async () => {
     // The case this whole file exists for: /tease user:<wearer> run by the
     // other person, then /off by the wearer.
-    sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER, startedBy: OTHER });
-    const ended = sessions.disarm(GUILD, WEARER);
+    armWearer([LUSH, HUSH], { startedBy: OTHER });
+    const result = sessions.disarm(GUILD, WEARER);
     await flush();
 
-    assert.equal(ended?.startedBy, OTHER);
+    assert.deepEqual(result?.removed.map((t) => t.startedBy), [OTHER, OTHER]);
     assert.equal(sessions.get(GUILD, WEARER), undefined);
+    // One Stop to every toy, not one per toy that might miss one.
     assert.equal(stopsTo(WEARER_UID).length, 1);
+    assert.equal(stopsTo(WEARER_UID)[0]!.toyId, undefined);
+  });
+
+  it('ends tease on one toy without touching the other', async () => {
+    armWearer([LUSH, HUSH], { startedBy: OTHER });
+    const result = sessions.disarm(GUILD, WEARER, { toyIds: [HUSH.id] });
+    await flush();
+
+    assert.equal(result?.ended, false);
+    assert.deepEqual([...sessions.get(GUILD, WEARER)!.toys.keys()], [LUSH.id]);
+    assert.deepEqual(stopsTo(WEARER_UID).map((c) => c.toyId), [HUSH.id]);
+  });
+
+  it('ends the session when its last toy is turned off', async () => {
+    armWearer([LUSH]);
+    const result = sessions.disarm(GUILD, WEARER, { toyIds: [LUSH.id] });
+    await flush();
+
+    assert.equal(result?.ended, true);
+    assert.equal(sessions.get(GUILD, WEARER), undefined);
   });
 
   it('disarm by the wearer ends their session and sends a Stop', async () => {
@@ -173,16 +204,26 @@ describe('tease', () => {
     assert.equal(count, 0);
   });
 
-  it('retune changes strength without resetting the count', () => {
-    const session = armWearer();
-    session.triggerCount = 7;
-    sessions.retune(GUILD, WEARER, { intensityPercent: 80 });
+  it('running it again retunes a toy without resetting its count', () => {
+    const { session } = armWearer([LUSH]);
+    session.toys.get(LUSH.id)!.triggerCount = 7;
+    const { added, updated } = armWearer([LUSH], { intensityPercent: 80 });
 
-    const after = sessions.get(GUILD, WEARER)!;
-    assert.equal(after, session);
-    assert.equal(after.intensityPercent, 80);
-    assert.equal(after.durationSec, config.BUZZ_DURATION_SEC);
-    assert.equal(after.triggerCount, 7);
+    const lush = sessions.get(GUILD, WEARER)!.toys.get(LUSH.id)!;
+    assert.equal(added.length, 0);
+    assert.equal(updated.length, 1);
+    assert.equal(lush.intensityPercent, 80);
+    assert.equal(lush.durationSec, config.BUZZ_DURATION_SEC);
+    assert.equal(lush.triggerCount, 7);
+  });
+
+  it('adding a second toy leaves the first one as it was', () => {
+    armWearer([LUSH], { intensityPercent: 30 });
+    const { session, added } = armWearer([HUSH], { intensityPercent: 90 });
+
+    assert.deepEqual(added.map((t) => t.toyId), [HUSH.id]);
+    assert.equal(session.toys.get(LUSH.id)!.intensityPercent, 30);
+    assert.equal(session.toys.get(HUSH.id)!.intensityPercent, 90);
   });
 });
 
@@ -206,5 +247,89 @@ describe('shouldPostReminder', () => {
       shouldPostReminder({ state: 'suspended', suspendedAt: T - 1, lastReminderAt: T }),
       false,
     );
+  });
+});
+
+describe('triggers with more than one toy', () => {
+  beforeEach(() => {
+    // The app reports both toys, connected.
+    store.recordCallback(
+      WEARER_UID,
+      [
+        { id: LUSH.id, name: 'lush', status: 1 },
+        { id: HUSH.id, name: 'hush', status: 1 },
+      ],
+      'ios',
+    );
+  });
+
+  it('sends one command to every toy when they share settings', async () => {
+    // Exactly what a one-toy setup has always sent: no toy ID at all.
+    const { session } = armWearer([LUSH, HUSH]);
+    assert.equal(await sessions.handleTrigger(session, 'test'), 'sent');
+
+    assert.deepEqual(vibrations().map((c) => c.toyId), [undefined]);
+    assert.equal(session.toys.get(LUSH.id)!.triggerCount, 1);
+    assert.equal(session.toys.get(HUSH.id)!.triggerCount, 1);
+  });
+
+  it('sends each toy its own strength when they differ', async () => {
+    armWearer([LUSH], { intensityPercent: 20 });
+    const { session } = armWearer([HUSH], { intensityPercent: 80 });
+    await sessions.handleTrigger(session, 'test');
+
+    const byToy = new Map(vibrations().map((c) => [c.toyId, c.action]));
+    assert.deepEqual([...byToy.keys()].sort(), [HUSH.id, LUSH.id].sort());
+    const lush = byToy.get(LUSH.id)!;
+    const hush = byToy.get(HUSH.id)!;
+    if (lush.kind !== 'function' || hush.kind !== 'function') return assert.fail();
+    assert.equal(lush.action, 'Vibrate:4');
+    assert.equal(hush.action, 'Vibrate:16');
+  });
+
+  it('only buzzes the toys that are teasing', async () => {
+    const { session } = armWearer([HUSH]);
+    await sessions.handleTrigger(session, 'test');
+    assert.deepEqual(vibrations().map((c) => c.toyId), [HUSH.id]);
+  });
+
+  it('uses one rate-limit slot per message, however many toys it buzzes', async () => {
+    armWearer([LUSH], { intensityPercent: 20 });
+    const { session } = armWearer([HUSH], { intensityPercent: 80 });
+    assert.equal(await sessions.handleTrigger(session, 'first'), 'sent');
+    assert.equal(await sessions.handleTrigger(session, 'second'), 'throttled');
+  });
+});
+
+describe('planTriggerSends', () => {
+  const tease = (toyId: string, intensityPercent = 50): ToyTease => ({
+    toyId,
+    toyName: toyId,
+    startedBy: 'x',
+    intensityPercent,
+    durationSec: 1.5,
+    armedAt: 0,
+    triggerCount: 0,
+    missedCount: 0,
+  });
+
+  it('collapses to one untargeted command when it can', () => {
+    const plan = planTriggerSends([tease('a'), tease('b')], ['a', 'b']);
+    assert.deepEqual(plan.map((p) => p.toyId), [undefined]);
+  });
+
+  it('targets each toy when only some of the link\'s toys are teasing', () => {
+    const plan = planTriggerSends([tease('a')], ['a', 'b']);
+    assert.deepEqual(plan.map((p) => p.toyId), ['a']);
+  });
+
+  it('targets each toy when settings differ', () => {
+    const plan = planTriggerSends([tease('a', 20), tease('b', 80)], ['a', 'b']);
+    assert.deepEqual(plan.map((p) => p.toyId), ['a', 'b']);
+  });
+
+  it('targets each toy when the app has not said what toys it has', () => {
+    const plan = planTriggerSends([tease('a')], []);
+    assert.deepEqual(plan.map((p) => p.toyId), ['a']);
   });
 });
