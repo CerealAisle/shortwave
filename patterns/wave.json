@@ -1,0 +1,6 @@
+{
+  "description": "Smooth rise and fall",
+  "intervalMs": 400,
+  "steps": [20, 30, 45, 60, 75, 85, 90, 85, 75, 60, 45, 30],
+  "durationSec": 40
+}

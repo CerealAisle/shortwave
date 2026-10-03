@@ -26,6 +26,9 @@ const schema = z.object({
   CALLBACK_BIND: z.string().default('127.0.0.1'),
 
   DATABASE_PATH: z.string().default('./data/bot.db'),
+  // One JSON file per /pattern. Read when the command runs, so new files
+  // need no restart. See patterns/README.md.
+  PATTERNS_DIR: z.string().default('./patterns'),
 
   BUZZ_INTENSITY_PERCENT: z.coerce.number().min(0).max(100).default(50),
   BUZZ_DURATION_SEC: z.coerce.number().min(0).default(1.5),

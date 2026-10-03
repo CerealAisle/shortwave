@@ -1,4 +1,5 @@
 import type {
+  AutocompleteInteraction,
   ChatInputCommandInteraction,
   SlashCommandBuilder,
   SlashCommandOptionsOnlyBuilder,
@@ -20,4 +21,6 @@ export interface BotCommand {
   /** Only the person who linked a toy may run it (checked before execute). */
   ownerOnly?: boolean;
   execute(interaction: ChatInputCommandInteraction): Promise<void>;
+  /** Suggestions for options declared with setAutocomplete(true). */
+  autocomplete?(interaction: AutocompleteInteraction): Promise<void>;
 }

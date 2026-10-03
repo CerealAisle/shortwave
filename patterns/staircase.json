@@ -1,0 +1,6 @@
+{
+  "description": "Holds each level before stepping up",
+  "intervalMs": 2000,
+  "steps": [25, 25, 50, 50, 75, 75, 100, 100, 0],
+  "durationSec": 36
+}
