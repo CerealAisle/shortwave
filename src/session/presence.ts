@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { log } from '../logger';
+import { explainCode } from '../lovense/client';
 import { isToyConnected } from '../lovense/toys';
 import type { LovenseToy } from '../lovense/types';
 import { store, type ToyLink } from '../store/store';
@@ -40,6 +41,47 @@ export interface PresenceStatus {
   heartbeatsWorking: boolean;
 }
 
+export type CommandResultListener = (payload: { uid: string; ok: boolean }) => void;
+
+/** Why a link is unreachable, in words, for the board and the outage notice. */
+export interface Diagnosis {
+  code: number | undefined;
+  /** What the code means. */
+  meaning: string;
+  /** What to do about it, when there is something specific. */
+  hint: string | null;
+  /** Heartbeats still arriving while commands are refused. */
+  backgrounded: boolean;
+}
+
+/**
+ * Explain the last failed command. The case worth naming is a 507 while
+ * heartbeats keep arriving: the phone and the app are alive, but iOS has
+ * suspended the app's command channel. Reopening from the background rarely
+ * fixes it; a force-quit does.
+ */
+export function diagnose(status: PresenceStatus, now = Date.now()): Diagnosis | null {
+  const result = status.lastResult;
+  if (status.presence !== 'offline' || !result || result.ok) return null;
+
+  const heartbeatFresh =
+    config.HEARTBEAT_TIMEOUT_SEC > 0 &&
+    status.lastSeen !== null &&
+    now - status.lastSeen <= config.HEARTBEAT_TIMEOUT_SEC * 1000;
+
+  const backgrounded = result.code === 507 && heartbeatFresh;
+  let hint: string | null = null;
+  if (backgrounded) {
+    hint =
+      'looks backgrounded — the app is still checking in, but commands are refused. ' +
+      'Force-quit Lovense Remote and reopen it';
+  } else if (result.code === 507) {
+    hint = 'the app is closed or the phone is offline. Open Lovense Remote';
+  }
+
+  return { code: result.code, meaning: explainCode(result.code), hint, backgrounded };
+}
+
 export type PresenceTransitionListener = (payload: {
   link: ToyLink;
   from: Presence;
@@ -54,6 +96,7 @@ export class PresenceMonitor {
   /** When each link entered its current state, for "unreachable since". */
   private changedAt = new Map<string, number>();
   private listeners: PresenceTransitionListener[] = [];
+  private resultListeners: CommandResultListener[] = [];
   private timer: NodeJS.Timeout | null = null;
 
   /**
@@ -85,6 +128,21 @@ export class PresenceMonitor {
     this.listeners.push(fn);
   }
 
+  /** Every command result Lovense gives, success or failure. */
+  onResult(fn: CommandResultListener): void {
+    this.resultListeners.push(fn);
+  }
+
+  private emitResult(uid: string, ok: boolean): void {
+    for (const fn of this.resultListeners) {
+      try {
+        fn({ uid, ok });
+      } catch (err) {
+        log.error(`Result listener threw: ${(err as Error).message}`);
+      }
+    }
+  }
+
   /**
    * Lovense answered a command with 507 "Lovense APP is offline". That is a
    * direct statement from the server that it has no live connection to the
@@ -97,6 +155,7 @@ export class PresenceMonitor {
    */
   markReportedOffline(uid: string, code = 507): void {
     this.results.set(uid, { at: Date.now(), ok: false, code });
+    this.emitResult(uid, false);
     if (this.reportedOffline.has(uid)) return;
     this.reportedOffline.add(uid);
     log.info(`Lovense reported ${uid} unreachable (${code}); marking it offline`);
@@ -110,6 +169,7 @@ export class PresenceMonitor {
   noteReachable(uid: string): void {
     this.results.set(uid, { at: Date.now(), ok: true });
     this.reportedOffline.delete(uid);
+    this.emitResult(uid, true);
     this.evaluate(uid);
   }
 
@@ -196,11 +256,18 @@ export class PresenceMonitor {
 
   /**
    * Called from the callback handler on every pairing callback and heartbeat.
-   * A fresh callback clears a 507 report — the app has re-registered with
-   * Lovense, so it is worth trying again.
+   *
+   * A heartbeat does NOT clear a 507. A backgrounded iOS app keeps
+   * heartbeating while refusing commands, and letting each heartbeat clear
+   * the 507 is what made sessions flap between paused and resumed every
+   * minute. Instead the prober re-tests promptly after a callback, and only
+   * a command that actually gets through brings the link back.
+   *
+   * With probing disabled nothing would ever re-test, so there the old rule
+   * stands: a callback clears it and the next trigger finds out.
    */
   noteCallback(uid: string): void {
-    this.reportedOffline.delete(uid);
+    if (config.PROBE_INTERVAL_SEC <= 0) this.reportedOffline.delete(uid);
     this.evaluate(uid);
   }
 

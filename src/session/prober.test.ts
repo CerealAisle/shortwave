@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { nextProbeAt } from './prober';
+import { MIN_RETRY_AFTER_CALLBACK_MS, nextProbeAt } from './prober';
 
 /**
  * The probe sends Vibrate:0. It moves nothing on its own, but it does replace
@@ -44,11 +44,16 @@ describe('nextProbeAt', () => {
     assert.equal(due({ lastResult: { at: T, ok: false, code: 507 }, lastSeen: T - 1 }), T + OFFLINE);
   });
 
-  it('checks again as soon as a callback arrives after a failure', () => {
-    // The app re-registered with Lovense; waiting out the backoff would leave
-    // the session paused for no reason.
+  it('checks again soon after a callback arrives following a failure', () => {
+    // A heartbeat no longer clears a 507 by itself, so this probe is what
+    // brings a recovered app back — without waiting out the backoff.
     const result = { at: T, ok: false, code: 507 };
-    assert.equal(due({ lastResult: result, lastSeen: T + 5_000 }), T + 5_000);
+    assert.equal(due({ lastResult: result, lastSeen: T + 90_000 }), T + 90_000);
+  });
+
+  it('but not more than once a minute, however often the app heartbeats', () => {
+    const result = { at: T, ok: false, code: 507 };
+    assert.equal(due({ lastResult: result, lastSeen: T + 5_000 }), T + MIN_RETRY_AFTER_CALLBACK_MS);
   });
 
   it('never fires while a command is still running on the toy', () => {

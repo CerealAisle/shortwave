@@ -12,6 +12,7 @@ import {
   respondWithToys,
   toysFromOption,
 } from '../toy-option';
+import { refuseIfStopped } from '../lockout';
 import type { BotCommand } from '../types';
 
 /**
@@ -30,6 +31,8 @@ import type { BotCommand } from '../types';
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('tease')
+    // Controller only: hidden from, and refused to, anyone but admins.
+    .setDefaultMemberPermissions(0)
     .setDescription('Tease mode: messages from anyone else in the main channel buzz the toy')
     .addUserOption((o) => o.setName('user').setDescription('Whose toy (defaults to yours)'))
     .addStringOption((o) =>
@@ -56,6 +59,7 @@ export const command: BotCommand = {
 
   async execute(interaction) {
     if (!interaction.guildId) return;
+    if (await refuseIfStopped(interaction)) return;
 
     const target = interaction.options.getUser('user') ?? interaction.user;
     const self = target.id === interaction.user.id;

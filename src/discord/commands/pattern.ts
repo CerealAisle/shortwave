@@ -10,6 +10,7 @@ import {
   respondWithToys,
   toyNames,
 } from '../toy-option';
+import { refuseIfStopped } from '../lockout';
 import type { BotCommand } from '../types';
 
 /**
@@ -24,6 +25,8 @@ import type { BotCommand } from '../types';
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('pattern')
+    // Controller only: hidden from, and refused to, anyone but admins.
+    .setDefaultMemberPermissions(0)
     .setDescription('Play a named pattern on a linked toy')
     .addStringOption((o) =>
       o
@@ -60,6 +63,7 @@ export const command: BotCommand = {
 
   async execute(interaction) {
     if (!interaction.guildId) return;
+    if (await refuseIfStopped(interaction)) return;
 
     const name = interaction.options.getString('name', true);
     const loaded = loadPattern(name);

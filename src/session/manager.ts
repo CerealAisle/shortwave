@@ -107,6 +107,40 @@ export function shouldPostReminder(
 }
 
 /**
+ * A command that moves nothing: Stop, or every motor at level 0 (the probe,
+ * /test). These are the only commands allowed through a /stop lockout.
+ */
+export function isZeroAction(action: ToyAction): boolean {
+  switch (action.kind) {
+    case 'function':
+      return (
+        action.action === 'Stop' ||
+        action.action.split(',').every((part) => Number(part.split(':')[1]) === 0)
+      );
+    case 'pattern':
+      return action.strength.split(';').every((s) => Number(s) === 0);
+    case 'preset':
+      return false;
+  }
+}
+
+/** After /stop, nothing that moves may start until `until`. */
+export interface Lockout {
+  until: number;
+  /** Who ran /stop. */
+  by: string;
+}
+
+export class StopLockoutError extends Error {
+  constructor(readonly lockout: Lockout) {
+    super('Stopped — nothing new can start until the /stop timer runs out');
+    this.name = 'StopLockoutError';
+  }
+}
+
+export type TestResult = { ok: true } | { ok: false; code: number | undefined; message: string };
+
+/**
  * Which commands a trigger turns into. When every teased toy shares one
  * strength and length and they are all of the link's toys, that is a single
  * command with no toy ID — exactly what a one-toy setup has always sent.
@@ -157,6 +191,8 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
   /** When whatever was last sent to each uid stops running on the toy. */
   private runningUntil = new Map<string, number>();
+  /** Read-through cache of the persisted /stop lockout, per guild. */
+  private lockouts = new Map<string, Lockout | null>();
   private eventListeners: SessionEventListener[] = [];
   private errorListeners: ErrorListener[] = [];
 
@@ -420,6 +456,46 @@ export class SessionManager {
     return active.length;
   }
 
+  private lockoutKey(guildId: string): string {
+    return `stop_lockout:${guildId}`;
+  }
+
+  /**
+   * The /stop lockout in force for this guild, or null. Persisted, so a
+   * restart part-way through can't cut it short.
+   */
+  lockout(guildId: string, now = Date.now()): Lockout | null {
+    if (!this.lockouts.has(guildId)) {
+      const raw = store.getSetting(this.lockoutKey(guildId));
+      let parsed: Lockout | null = null;
+      try {
+        parsed = raw ? (JSON.parse(raw) as Lockout) : null;
+      } catch {
+        parsed = null;
+      }
+      this.lockouts.set(guildId, parsed);
+    }
+    const current = this.lockouts.get(guildId) ?? null;
+    return current && current.until > now ? current : null;
+  }
+
+  /**
+   * Block anything that moves for `ms`. A new /stop can only extend the
+   * lockout, never shorten it: it is the wearer's guarantee, and nobody else
+   * should be able to cut it short with a /stop of their own.
+   */
+  lockOut(guildId: string, ms: number, by: string, now = Date.now()): Lockout | null {
+    const current = this.lockout(guildId, now);
+    if (ms <= 0) return current;
+    if (current && current.until >= now + ms) return current;
+
+    const next: Lockout = { until: now + ms, by };
+    this.lockouts.set(guildId, next);
+    store.setSetting(this.lockoutKey(guildId), JSON.stringify(next));
+    log.warn(`Stop lockout for guild ${guildId} until ${new Date(next.until).toISOString()}`);
+    return next;
+  }
+
   /**
    * A Discord message qualified as a trigger. The return value says what
    * happened, so the caller can log it without spamming the channel.
@@ -427,9 +503,15 @@ export class SessionManager {
   async handleTrigger(
     session: Session,
     source: string,
-  ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'failed'> {
+  ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'stopped' | 'failed'> {
     const teases = [...session.toys.values()];
     const missAll = () => teases.forEach((t) => (t.missedCount += 1));
+
+    // /stop turns tease off, so this is a backstop, not the main guard.
+    if (this.lockout(session.guildId)) {
+      missAll();
+      return 'stopped';
+    }
 
     if (session.state === 'suspended') {
       missAll();
@@ -528,16 +610,23 @@ export class SessionManager {
    * outcome is reported to presence.
    */
   async probe(uid: string): Promise<boolean> {
+    return (await this.test(uid, { source: 'probe' })).ok;
+  }
+
+  /**
+   * Send Vibrate:0 — nothing moves — and report what Lovense said. The probe
+   * uses it for every toy at once; /test for one toy at a time. Either way
+   * the result feeds presence, so a successful /test also ends an outage.
+   */
+  async test(uid: string, opts: { toyId?: string; source?: string } = {}): Promise<TestResult> {
     try {
-      await this.sendWithWakeRetry(uid, actions.probe(), 'probe');
-      return true;
+      await this.sendWithWakeRetry(uid, actions.probe(), opts.source ?? 'test', opts.toyId);
+      return { ok: true };
     } catch (err) {
-      if (err instanceof LovenseError && err.code !== undefined) {
-        presence.markReportedOffline(uid, err.code);
-      } else {
-        presence.noteInconclusive(uid);
-      }
-      return false;
+      const code = err instanceof LovenseError ? err.code : undefined;
+      if (code !== undefined) presence.markReportedOffline(uid, code);
+      else presence.noteInconclusive(uid);
+      return { ok: false, code, message: (err as Error).message };
     }
   }
 
@@ -555,6 +644,17 @@ export class SessionManager {
   ): Promise<void> {
     const description = describeAction(action) + (opts.toyId ? ` [toy ${opts.toyId}]` : '');
     const isProbe = source.startsWith('probe');
+
+    // The /stop lockout is enforced here, at the one choke point, so no
+    // command — current or future — can move a toy while it lasts.
+    if (!isZeroAction(action)) {
+      const guildId = store.getByUid(uid)?.guildId;
+      const lock = guildId ? this.lockout(guildId) : null;
+      if (lock) {
+        store.logCommand({ uid, description, source, ok: false, error: 'blocked: /stop lockout' });
+        throw new StopLockoutError(lock);
+      }
+    }
     const previousRunningUntil = this.runningUntil.get(uid);
 
     // Marked before the request goes out, so a probe can't slip in while
