@@ -8,7 +8,7 @@ const bool = z
   .optional()
   .transform((v) => v === 'true' || v === '1');
 
-const schema = z.object({
+const fields = z.object({
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_CLIENT_ID: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1),
@@ -93,7 +93,9 @@ const schema = z.object({
 
   TRIGGER_ON_BOT_MESSAGES: bool,
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-}).refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
+});
+
+const schema = fields.refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
   // One channel doing both jobs would put every bot notice in front of the
   // person the command channel exists to keep them from.
   message: 'must differ from MAIN_CHANNEL_ID',
@@ -155,4 +157,7 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+/** Every setting the bot reads. .env.test must pin each one; see config.test.ts. */
+export const CONFIG_KEYS = Object.keys(fields.shape);
 export type Config = typeof config;
