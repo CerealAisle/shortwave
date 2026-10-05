@@ -639,7 +639,7 @@ In your Discord server, in the main channel:
 1. `/status` → should say no toys are linked.
 
 2. She runs `/connect`. She gets an ephemeral QR code (only she can see it).
-   In Lovense Remote: **Me → Scan QR code**, scan, confirm.
+   In Lovense Remote: tap **(+)** in the upper right → **Scan QR code**, scan, confirm.
 
    Within a few seconds the command channel should show *"… connected successfully
    (…)"*. If nothing appears the callback isn't arriving — check

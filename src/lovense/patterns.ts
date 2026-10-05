@@ -118,6 +118,12 @@ export function loadAllPatterns(dir = patternsDir()): { name: string; result: Pa
   return listPatternNames(dir).map((name) => ({ name, result: loadPattern(name, dir) }));
 }
 
-export function patternAction(pattern: Pattern): ToyAction {
-  return actions.pattern(pattern.steps, pattern.intervalMs, pattern.durationSec);
+/**
+ * The Lovense command for a pattern. Lovense repeats the steps until the
+ * time runs out, so `durationSec` (from /pattern minutes:) is how a pattern
+ * loops for longer than its file says. Capped at MAX_DURATION_SEC.
+ */
+export function patternAction(pattern: Pattern, durationSec?: number): ToyAction {
+  const sec = durationSec === undefined ? pattern.durationSec : Math.min(durationSec, MAX_DURATION_SEC);
+  return actions.pattern(pattern.steps, pattern.intervalMs, sec);
 }

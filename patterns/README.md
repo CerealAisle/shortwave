@@ -34,6 +34,10 @@ Files starting with `_`, like the template, are ignored.
 | `durationSec` | no | How long the whole pattern plays. The steps **loop** until this runs out. Leave it out to play the steps once. At most `3600`. |
 | `description` | no | Shown next to the name in Discord's suggestions. Up to 80 characters. |
 
+`/pattern name:<name> minutes:<n>` overrides `durationSec` for one play, up
+to 60 minutes — the steps loop for that long. That's the way to run a short
+pattern continuously.
+
 So the template plays six half-second steps — three seconds per loop — over
 and over for 20 seconds.
 

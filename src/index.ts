@@ -1,5 +1,6 @@
 import { Events } from 'discord.js';
 import { text } from './text';
+import { setBoard } from './discord/board-ref';
 import { notify } from './discord/notify';
 import { describeTease } from './discord/toy-option';
 
@@ -14,6 +15,7 @@ import { focusLabel, getFocus } from './session/focus';
 import { presence } from './session/presence';
 import { prober } from './session/prober';
 import { store } from './store/store';
+import { timers } from './timers';
 
 async function main() {
   const client = createClient();
@@ -34,7 +36,11 @@ async function main() {
     },
     { get: store.getSetting, set: store.setSetting },
   );
-  client.once(Events.ClientReady, () => board.start(client));
+  setBoard(board);
+  client.once(Events.ClientReady, () => {
+    board.start(client);
+    timers.start(client);
+  });
 
   // Outages, pauses, recoveries and errors are shown on the pinned board, not
   // posted: an iOS app dropping in and out made those a steady stream. The
@@ -103,6 +109,7 @@ async function main() {
     log.info(`${signal} received, shutting down`);
     try {
       board.stop();
+      timers.stop();
       prober.stop();
       presence.stop();
       // Stop every toy before the process goes away.

@@ -119,22 +119,34 @@ export function renderBoard(body: string, now = Date.now()): string {
 }
 
 /**
- * One message in the command channel, edited in place. Its ID is persisted,
- * so a restart edits the same post instead of adding another; if the post
- * has been deleted, a fresh one is posted and pinned.
+ * One message, edited in place. It starts in the command channel; /status
+ * moves it to wherever it is run. Its location is persisted, so a restart
+ * edits the same post instead of adding another; if the post has been
+ * deleted, a fresh one is posted and pinned in the same channel.
  *
  * Updates are poll-and-diff: every few seconds the board is rendered and only
  * edited if the body changed, and never more than once per MIN_EDIT_GAP_MS. `requestUpdate()` brings that forward
  * for events worth showing promptly, without breaking the minimum gap.
  */
+/** Where the board lives. Saved, so a restart keeps updating the same post. */
+interface BoardLocation {
+  channelId: string;
+  messageId: string;
+}
+
+const LOCATION_KEY = 'status_board';
+
 export class StatusBoard {
   private client: Client | null = null;
   private message: Message | null = null;
   private lastBody: string | null = null;
   private lastEditAt = 0;
+  /** Whether pinning worked the last time the board was posted. */
+  private lastPinOk = false;
   private interval: NodeJS.Timeout | null = null;
   private pending: NodeJS.Timeout | null = null;
-  private running = false;
+  /** Serialises refreshes and reposts, so they never race to post twice. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly rows: () => BoardRow[],
@@ -146,16 +158,29 @@ export class StatusBoard {
     },
   ) {}
 
-  /** Keyed by channel, so pointing the bot at a new channel starts a new post. */
-  private get settingKey(): string {
-    return `status_board_message:${config.COMMAND_CHANNEL_ID}`;
+  private location(): BoardLocation | null {
+    const raw = this.settings.get(LOCATION_KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as BoardLocation;
+      } catch {
+        return null;
+      }
+    }
+    // Saved before the board could move: it was in the command channel.
+    const legacy = this.settings.get(`status_board_message:${config.COMMAND_CHANNEL_ID}`);
+    return legacy ? { channelId: config.COMMAND_CHANNEL_ID, messageId: legacy } : null;
+  }
+
+  private saveLocation(message: Message): void {
+    this.settings.set(LOCATION_KEY, JSON.stringify({ channelId: message.channelId, messageId: message.id }));
   }
 
   start(client: Client): void {
     this.client = client;
-    this.interval = setInterval(() => void this.refresh(), CHECK_EVERY_MS);
+    this.interval = setInterval(() => this.enqueue(() => this.refresh()), CHECK_EVERY_MS);
     this.interval.unref?.();
-    void this.refresh();
+    this.enqueue(() => this.refresh());
   }
 
   stop(): void {
@@ -165,21 +190,42 @@ export class StatusBoard {
     this.pending = null;
   }
 
+  private enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(job, job);
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
   /** Something changed; show it as soon as the edit gap allows. */
   requestUpdate(): void {
     if (!this.client || this.pending) return;
     const wait = Math.max(0, this.lastEditAt + MIN_EDIT_GAP_MS - Date.now());
     this.pending = setTimeout(() => {
       this.pending = null;
-      void this.refresh();
+      this.enqueue(() => this.refresh());
     }, wait);
     this.pending.unref?.();
   }
 
+  /**
+   * Delete the board and post a fresh one in `channelId`, pinned. From then
+   * on that copy is the one kept up to date — this is what /status does.
+   * Resolves to whether pinning worked.
+   */
+  repost(channelId: string): Promise<{ pinned: boolean }> {
+    return this.enqueue(async () => {
+      const old = this.message ?? (await this.fetchSaved());
+      if (old) await old.delete().catch(() => {});
+      this.message = null;
+      const posted = await this.post(channelId);
+      if (!posted) throw new Error(`${channelId} is not a text channel`);
+      return { pinned: this.lastPinOk };
+    });
+  }
+
   private async refresh(): Promise<void> {
-    if (!this.client || this.running) return;
+    if (!this.client) return;
     if (Date.now() - this.lastEditAt < MIN_EDIT_GAP_MS) return;
-    this.running = true;
 
     try {
       const body = renderBoardBody(this.rows(), Date.now(), this.banner());
@@ -198,51 +244,66 @@ export class StatusBoard {
       } else {
         log.warn(`Status board update failed: ${(err as Error).message}`);
       }
-    } finally {
-      this.running = false;
+    }
+  }
+
+  private async textChannel(channelId: string): Promise<TextChannel | null> {
+    const channel = await this.client!.channels.fetch(channelId);
+    if (channel?.type !== ChannelType.GuildText) {
+      log.warn(`Status board: ${channelId} is not a text channel`);
+      return null;
+    }
+    return channel as TextChannel;
+  }
+
+  /** The saved board, or null if there isn't one or it has been deleted. */
+  private async fetchSaved(): Promise<Message | null> {
+    const saved = this.location();
+    if (!saved) return null;
+    const channel = await this.textChannel(saved.channelId);
+    if (!channel) return null;
+    try {
+      return await channel.messages.fetch(saved.messageId);
+    } catch (err) {
+      // Anything other than "it's gone" (a network blip, a Discord outage)
+      // must not lead to a duplicate. Try again on the next refresh.
+      if (!isUnknownMessage(err)) throw err;
+      log.info('Status board message is gone; posting a new one');
+      return null;
     }
   }
 
   private async ensureMessage(): Promise<Message | null> {
     if (this.message) return this.message;
+    this.message = await this.fetchSaved();
+    if (this.message) return this.message;
+    // Nothing saved, or deleted: post where it was, else the command channel.
+    return this.post(this.location()?.channelId ?? config.COMMAND_CHANNEL_ID);
+  }
 
-    const channel = await this.client!.channels.fetch(config.COMMAND_CHANNEL_ID);
-    if (channel?.type !== ChannelType.GuildText) {
-      log.warn(`Status board: ${config.COMMAND_CHANNEL_ID} is not a text channel`);
-      return null;
-    }
-    const text = channel as TextChannel;
-
-    const storedId = this.settings.get(this.settingKey);
-    if (storedId) {
-      try {
-        this.message = await text.messages.fetch(storedId);
-        return this.message;
-      } catch (err) {
-        // Anything other than "it's gone" (a network blip, a Discord outage)
-        // must not post a duplicate. Try again on the next refresh.
-        if (!isUnknownMessage(err)) throw err;
-        log.info('Status board message is gone; posting a new one');
-      }
-    }
+  private async post(channelId: string): Promise<Message | null> {
+    const channel = await this.textChannel(channelId);
+    if (!channel) return null;
 
     const body = renderBoardBody(this.rows(), Date.now(), this.banner());
-    const posted = await text.send({ content: renderBoard(body), allowedMentions: { parse: [] } });
-    this.settings.set(this.settingKey, posted.id);
+    const posted = await channel.send({ content: renderBoard(body), allowedMentions: { parse: [] } });
+    this.saveLocation(posted);
     this.message = posted;
     this.lastBody = body;
     this.lastEditAt = Date.now();
 
     try {
       await posted.pin();
+      this.lastPinOk = true;
     } catch (err) {
+      this.lastPinOk = false;
       log.warn(
         `Could not pin the status board (${(err as Error).message}). ` +
-          'Give the bot the Pin Messages permission in the command channel.',
+          'Give the bot the Pin Messages permission in that channel.',
       );
     }
 
-    log.info(`Status board posted as ${posted.id}`);
+    log.info(`Status board posted as ${posted.id} in ${channelId}`);
     return posted;
   }
 }

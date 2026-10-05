@@ -267,7 +267,8 @@ channel. Slash commands work in either and reply where they were run, so
 `/stop` and `/status` are usable from the main channel. Commands from any
 other channel are refused.
 
-**The pinned status post.** One message in the command channel shows every
+**The pinned status post.** One message — in the command channel until
+`/status` moves it to wherever it's run — shows every
 linked user, their toys, battery, whether each is reachable and when it was
 last probed, and the session state. It is edited in place, at most once every
 15 seconds and only when something changed. Its ID is stored in the
@@ -368,8 +369,9 @@ owner) also sees:
 | `/focus <toy>` | Which of her toys tease, buzz and pattern reach: **All connected toys**, or one toy by name or nickname. Saved, and applies at once — including to tease already running |
 | `/tease [intensity] [duration] [off]` | Tease on: others' messages buzz her focused toys, decided at each message. No expiry. Re-run while on to change strength or length. `off:True` turns it off and sends a stop, even during a `/stop` lockout |
 | `/buzz <intensity> <seconds>` | One-off vibration on her focused toys |
-| `/pattern <name>` | Play a named pattern from `patterns/` on her focused toys. The name autocompletes |
-| `/status` | Linked toys, battery, focus, tease state, trigger counts |
+| `/pattern <name> [minutes]` | Play a named pattern from `patterns/` on her focused toys. The name autocompletes. `minutes` loops it for that long (max 60) |
+| `/status` | Deletes the status board and reposts it, pinned, in this channel; the bot keeps that copy updated from then on |
+| `/timer <name> <duration>` | Posts here, pinging you, when it runs out. `10m`, `1h30m`, `45s` or minutes; up to 7 days. Same name replaces it; `duration:0` cancels. Survives restarts |
 | `/disconnect <target>` | Delete someone's link from the bot. She disconnects from Lovense Remote instead |
 
 Controller commands are hidden with Discord's own default permission

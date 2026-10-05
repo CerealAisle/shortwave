@@ -106,6 +106,20 @@ describe('patternAction', () => {
   });
 });
 
+describe('patternAction with a duration override', () => {
+  it('loops the steps for longer than the file says', () => {
+    const r = parse({ intervalMs: 500, steps: [20, 80], durationSec: 10 });
+    assert.ok(r.ok);
+    assert.equal(patternAction(r.pattern, 600).timeSec, 600);
+  });
+
+  it('never exceeds the hour cap, whatever is asked', () => {
+    const r = parse(good);
+    assert.ok(r.ok);
+    assert.equal(patternAction(r.pattern, 99_999).timeSec, 3600);
+  });
+});
+
 describe('loading from a folder', () => {
   const dir = mkdtempSync(join(tmpdir(), 'patterns-'));
   writeFileSync(join(dir, 'ok.json'), JSON.stringify(good));

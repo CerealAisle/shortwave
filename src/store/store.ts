@@ -129,6 +129,7 @@ const stmts = {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `),
   deleteSetting: db.prepare('DELETE FROM settings WHERE key = ?'),
+  listSettings: db.prepare("SELECT key, value FROM settings WHERE key LIKE ? ESCAPE '\\'"),
   insertLog: db.prepare(`
     INSERT INTO command_log (uid, description, source, ok, error, created_at)
     VALUES (@uid, @description, @source, @ok, @error, @created_at)
@@ -210,6 +211,12 @@ export const store = {
 
   deleteSetting(key: string): void {
     stmts.deleteSetting.run(key);
+  },
+
+  /** Every setting whose key starts with `prefix`. */
+  listSettings(prefix: string): { key: string; value: string }[] {
+    const escaped = prefix.replace(/[\\%_]/g, (c) => `\\${c}`);
+    return stmts.listSettings.all(`${escaped}%`) as { key: string; value: string }[];
   },
 
   close(): void {

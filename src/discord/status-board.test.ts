@@ -152,7 +152,7 @@ describe('renderBoardBody', () => {
   });
 
   it('says so when nothing is linked', () => {
-    assert.match(renderBoardBody([], NOW), /No toys linked/);
+    assert.match(renderBoardBody([], NOW), /No Lovense Remote app is linked/);
   });
 });
 
