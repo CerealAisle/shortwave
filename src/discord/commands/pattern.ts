@@ -1,6 +1,12 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { makeUid } from '../../lovense/client';
-import { listPatternNames, loadAllPatterns, loadPattern, patternAction } from '../../lovense/patterns';
+import {
+  MAX_DURATION_SEC,
+  listPatternNames,
+  loadAllPatterns,
+  loadPattern,
+  patternAction,
+} from '../../lovense/patterns';
 import { focusTargets, getFocus } from '../../session/focus';
 import { sessions } from '../../session/manager';
 import { text } from '../../text';
@@ -11,7 +17,8 @@ import type { BotCommand } from '../types';
 
 /**
  * Play a named pattern from the patterns directory on her focused toys.
- * One-shot: it runs for the pattern's duration and then stops on the toy by
+ * `minutes` overrides how long it plays — Lovense loops the steps — so a
+ * short pattern can run for a while. One-shot: it runs for that long and then stops on the toy by
  * itself. `/stop` ends it sooner; it goes through sendNow like everything
  * else, so the intensity cap and the command log apply.
  *
@@ -30,6 +37,13 @@ export const command: BotCommand = {
         .setDescription(text.pattern.describeName)
         .setRequired(true)
         .setAutocomplete(true),
+    )
+    .addNumberOption((o) =>
+      o
+        .setName('minutes')
+        .setDescription(text.pattern.describeMinutes(MAX_DURATION_SEC / 60))
+        .setMinValue(0.1)
+        .setMaxValue(MAX_DURATION_SEC / 60),
     ),
 
   async autocomplete(interaction) {
@@ -79,18 +93,22 @@ export const command: BotCommand = {
     }
 
     const { pattern } = loaded;
+    const minutes = interaction.options.getNumber('minutes');
+    const durationSec = minutes !== null ? Math.round(minutes * 60) : pattern.durationSec;
     await interaction.deferReply();
 
     try {
       for (const toyId of targets.toyIds ?? [undefined]) {
         await sessions.sendNow(
           makeUid(interaction.guildId, target.userId),
-          patternAction(pattern),
+          patternAction(pattern, durationSec),
           `pattern:${pattern.name}:${interaction.user.id}`,
           { toyId },
         );
       }
-      await interaction.editReply(text.pattern.playing(pattern.name, pattern.durationSec, targets.label));
+      await interaction.editReply(
+        text.pattern.playing(pattern.name, durationSec, targets.label, Date.now() + durationSec * 1000),
+      );
     } catch (err) {
       await interaction.editReply(failureText(err));
     }

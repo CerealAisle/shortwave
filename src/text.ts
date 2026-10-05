@@ -8,6 +8,8 @@
  * Discord formatting that appears below:
  *   **bold**   *italic*   `code`   -# small grey text (a whole line)
  *   rel(…)   renders as a live relative time, e.g. "in 3 minutes", "2 minutes ago"
+ *            — so it reads wrongly after "until"; use at(…) there
+ *   at(…)    renders as a clock time in the viewer's timezone, e.g. "9:41 PM"
  *   userMention(id) / channelMention(id)   render as @name / #channel
  *
  * Slash command and option descriptions (the `describe` entries) are shown in
@@ -21,6 +23,8 @@ import { channelMention, time, userMention } from 'discord.js';
 
 /** A Discord live relative time: "2 minutes ago", "in 30 minutes". */
 const rel = (ms: number) => time(Math.floor(ms / 1000), 'R');
+/** A Discord clock time in the viewer's own timezone: "9:41 PM". */
+const at = (ms: number) => time(Math.floor(ms / 1000), 't');
 /** First letter upper-cased, for a phrase that starts a sentence. */
 const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 /** " (507)", or nothing when there is no code. */
@@ -32,17 +36,17 @@ export const text = {
   // ===========================================================================
   common: {
     /** A command used outside the bot's server. */
-    wrongServer: 'This bot only works in its own server.',
+    wrongServer: "This bot doesn't work in this server.",
     /** A command used in a channel that is neither main nor command. */
-    wrongChannel: 'Commands only work in the main channel or the bot channel.',
+    wrongChannel: "Commands don't work in this channel.",
     /** A command crashed. */
     somethingWentWrong: 'Something went wrong running that command.',
 
     /** The target has never run /connect. */
     noToy: (self: boolean, name: string) =>
       self
-        ? 'You have no toy linked yet. Run `/connect` first.'
-        : `${name} has no toy linked yet. She needs to run \`/connect\`.`,
+        ? 'You have not linked your Lovense Remote app. Run `/connect` first.'
+        : `${name} has not linked her Lovense Remote app. She needs to run \`/connect\`.`,
     /** /connect was run but the QR code was never scanned. */
     notScanned: (self: boolean, name: string) =>
       self
@@ -51,7 +55,7 @@ export const text = {
 
     /** A command that would move a toy, refused during a /stop lockout. */
     stopped: (by: string, until: number) =>
-      `Stopped by ${userMention(by)} — nothing can start ${rel(until)}.`,
+      `Stopped by ${userMention(by)} — paused until ${at(until)} (${rel(until)}).`,
 
     /** A command sent something and Lovense refused it. */
     commandFailed: (meaning: string, code: number | undefined) =>
@@ -63,7 +67,7 @@ export const text = {
   // ===========================================================================
   target: {
     /** Nobody has linked yet, so there is nobody to act on. */
-    noneLinked: 'Nobody has linked a toy yet. Run `/connect` first.',
+    noneLinked: 'No Lovense Remote app is linked yet. Run `/connect` first.',
     /** TARGET_USER_ID is unset and more than one person is linked. */
     ambiguous:
       "More than one person is linked, so I can't tell who to act on. Set `TARGET_USER_ID` in `.env`.",
@@ -73,7 +77,7 @@ export const text = {
   // Focus: which of her toys tease, buzz and pattern reach
   // ===========================================================================
   focus: {
-    describe: 'Choose which toys tease, buzz and pattern reach',
+    describe: 'Choose which toys to target with tease, buzz and pattern',
     describeToy: 'All connected toys, or one toy',
     /** The first suggestion in the list. */
     allChoice: 'All connected toys',
@@ -92,7 +96,7 @@ export const text = {
 
     // Reasons a command (or a tease buzz) can't reach the focus right now.
     // They follow "Can't buzz: …" and similar.
-    noneConnected: 'none of her toys are connected right now',
+    noneConnected: 'no toys are connected right now',
     focusedGone: (toy: string) =>
       `the focused toy, ${toy}, isn't reported by Lovense Remote any more. Use \`/focus\` to pick another`,
     focusedDisconnected: (toy: string) => `the focused toy, ${toy}, isn't connected right now`,
@@ -104,7 +108,7 @@ export const text = {
   toy: {
     /** The app has not reported any toys. */
     noneReported:
-      "Lovense Remote hasn't reported any toys yet. Connect a toy in the app and wait a few seconds",
+      "Lovense Remote hasn't reported any toys yet. Connect a toy in the app",
     /** Two toys share the name typed. */
     ambiguous: (typed: string) =>
       `more than one toy is called "${typed}". Pick it from the suggestions instead`,
@@ -150,11 +154,13 @@ export const text = {
     embedTitle: 'Connect Lovense Remote',
     embedSteps: [
       '1. Open **Lovense Remote** and connect your toys to it.',
-      '2. Tap **Me → Scan QR code** and scan the image below.',
+      '2. Tap **(+)** in the upper right corner → **Scan QR code**, and scan the image below.',
       '3. Confirm the prompt in the app.',
       '',
-      'This links the **app**, not a single toy: any toy connected to Lovense Remote can be used.',
-      'You stay in control: **Stop** in the app ends the link at once, and `/stop` halts everything from here.',
+      'This links the **app**: any toy connected to Lovense Remote can be used.',
+      'Connect only needs to be run once.',
+      'To **Disconnect**, tap **Toy** → **Stop** in the banner in the Lovense Remote app. This ends the link at once.',
+      'Use `/stop` to stop everything from Discord and pause for a while.',
     ],
     /** Added under the steps when Lovense gives a code for the PC app. */
     pcCode: (code: string) => `\nUsing Lovense Remote for PC? Enter code: \`${code}\``,
@@ -170,7 +176,7 @@ export const text = {
   // /test — everyone. Always tests her toys, whoever runs it.
   // ===========================================================================
   test: {
-    describe: 'Check whether the toys are responding (nothing will move)',
+    describe: "Check whether the toys are responding (toys won't vibrate)",
 
     /** First line of the reply. */
     heading: (self: boolean, name: string) => `**Test: ${self ? 'your' : `${name}'s`} toys**`,
@@ -178,7 +184,7 @@ export const text = {
     notResponding: (toy: string, meaning: string, code: number | undefined) =>
       `🔴 ${toy} — not responding: ${meaning}${codeSuffix(code)}`,
     /** The app answered but has no toy connected over Bluetooth. */
-    appOnlyNoToy: '🟡 Lovense Remote answered, but no toy is connected to it. Check Bluetooth.',
+    appOnlyNoToy: '🟡 Lovense Remote answered, but no toy is connected to it. Check the toy is connected in the app.',
     /** No toy reports connected and the app didn't answer either. */
     appNotResponding: (meaning: string) => `🔴 Not responding — ${meaning}`,
     /** A toy the app lists but says is disconnected. */
@@ -192,50 +198,50 @@ export const text = {
       `Couldn't DM ${userMention(owner)} the steps — their DMs may be closed.`,
     /** Last line, small. */
     footer: (lastCheckIn: number) =>
-      `-# Nothing moved: the test sends a 0% command. Lovense Remote last checked in ${rel(lastCheckIn)}.`,
+      `-# The test sends a 0% vibrate command. Lovense Remote last checked in ${rel(lastCheckIn)}.`,
   },
 
   // ===========================================================================
   // /stop — everyone
   // ===========================================================================
   stop: {
-    describe: 'Stop everything now, and keep it stopped for a while',
+    describe: 'Stop everything now, and keep it paused for a while',
     describeDuration: (defaultMinutes: number) =>
       `Minutes to keep everything stopped (default ${defaultMinutes}; 0 lifts a stop)`,
 
     /** With a lockout. */
     stoppedUntil: (until: number) =>
-      `**Stopped.** Every toy has been halted. Nothing can start again ${rel(until)}.`,
+      `**Stopped.** Every toy has been stopped. Paused until ${at(until)} (${rel(until)}).`,
     /** duration:0 while no lockout was running. */
-    stoppedNoLock: '**Stopped.** Every toy has been halted. You can start again whenever you like.',
+    stoppedNoLock: '**Stopped.** Every toy has been stopped. You can start again whenever you like.',
     /** duration:0 while a lockout was running: lifts it. */
-    stoppedAndLifted: '**Stopped**, and the stop timer is lifted — things can start again now.',
+    stoppedAndLifted: '**Stopped**, and the stop timer is lifted — commands can start again now.',
   },
 
   // ===========================================================================
   // /tease — controller. Acts on her toys, following the focus.
   // ===========================================================================
   tease: {
-    describe: 'Tease: messages from anyone else in the main channel buzz her focused toys',
+    describe: 'Tease: messages in the main channel buzz her toys',
     describeIntensity: (defaultPercent: number) => `Buzz strength %, default ${defaultPercent}`,
     describeDuration: (defaultSec: number) => `Buzz length in seconds, default ${defaultSec}`,
     describeOff: 'Turn tease off instead',
 
     /** Her app is known unreachable, so starting would do nothing. */
     unreachable: (name: string) =>
-      `${name}'s Lovense Remote isn't reachable, so tease would do nothing. Run \`/test\` to see why.`,
+      `${name}'s Lovense Remote isn't reachable. Run \`/test\` to see why.`,
 
     /** Tease started. */
     started: (name: string, percent: number, sec: number, focus: string, mainChannelId: string) =>
       `**Tease on** for ${name}: ${percent}% for ${sec}s.\n` +
-      `Messages from anyone else in ${channelMention(mainChannelId)} buzz ${focus}.\n` +
+      `Messages in ${channelMention(mainChannelId)} buzz ${focus}.\n` +
       '`/tease off:True` turns it off, `/focus` changes which toys, `/stop` halts everything.',
     /** /tease run again while already on: strength or length changed. */
     retuned: (name: string, percent: number, sec: number, focus: string) =>
       `**Tease updated** for ${name}: now ${percent}% for ${sec}s, reaching ${focus}.`,
     /** Added when the focus can't be reached right now. */
     focusProblem: (error: string) =>
-      `\n⚠️ Right now ${error}, so messages won't buzz anything until that changes.`,
+      `\n⚠️ Right now ${error}, so messages won't buzz anything until fixed.`,
     /** Added when her app hasn't been confirmed reachable yet. */
     notConfirmed: "\n\n*Not confirmed reachable yet — run `/test` if you're unsure.*",
 
@@ -251,13 +257,13 @@ export const text = {
   // /buzz — controller. Her focused toys.
   // ===========================================================================
   buzz: {
-    describe: 'Vibrate her focused toys at a given strength for a given time',
+    describe: 'Vibrate her toys at a given strength for a given time',
     describeIntensity: 'Strength as a percentage',
     describeSeconds: 'How long to run',
     /** The focus can't be reached right now. */
     cannot: (error: string) => `Can't buzz: ${error}.`,
     sent: (percent: number, sec: number, focus: string) =>
-      `Sent: ${percent}% for ${sec}s to ${focus}. \`/stop\` ends it early.`,
+      `Sent: ${percent}% for ${sec}s to ${focus}. \`/stop duration:0\` to cancel.`,
   },
 
   // ===========================================================================
@@ -266,41 +272,33 @@ export const text = {
   pattern: {
     describe: 'Play a named pattern on her focused toys',
     describeName: 'Which pattern (from the patterns folder)',
+    describeMinutes: (max: number) => `How long to play it, looping (default: the pattern's own length; max ${max})`,
     /** In the name suggestions, for a file that fails validation. */
     invalidSuggestion: 'invalid file — see /pattern',
     /** The pattern file is missing or invalid. */
     cannotPlay: (name: string, error: string) => `Can't play "${name}": ${error}.`,
     available: (names: string) => `Available: ${names}`,
-    noPatterns: 'There are no patterns yet. Copy `patterns/_template.json` to add one.',
+    noPatterns: 'There are no patterns yet. Check the patterns folder.',
     /** The focus can't be reached right now. */
     cannot: (name: string, error: string) => `Can't play "${name}": ${error}.`,
-    playing: (name: string, sec: number, focus: string) =>
-      `Playing **${name}** for ${sec}s on ${focus}. \`/stop\` ends it early.`,
+    playing: (name: string, sec: number, focus: string, endsAt: number) =>
+      `Playing **${name}** on ${focus} for ${sec >= 120 ? `${Math.round(sec / 60)} minutes` : `${sec}s`}, until ${at(endsAt)}. ` +
+      '`/stop duration:0` to cancel.',
   },
 
   // ===========================================================================
   // /status — controller
   // ===========================================================================
   status: {
-    describe: 'Show linked toys, the focus, and whether tease is on',
-    noLinks: 'No toys are linked. Run `/connect` to link one.',
-    embedTitle: 'Toy status',
-    online: '🟢 Online',
-    offline: '🔴 Offline',
-    unknown: '⚪ Unknown',
-    noHeartbeats: ' (no check-ins — enable heartbeat in the Lovense dashboard)',
-    app: (platform: string | null) => `App: ${platform ?? 'unknown'}`,
-    lastCheckIn: (at: number) => `Last check-in: ${rel(at)}`,
-    neverCheckedIn: 'Last check-in: never — QR not scanned yet',
-    focus: (label: string) => `Focus: ${label}`,
-    toyLine: (toy: string, battery: number | undefined, connected: boolean, focused: boolean) =>
-      `• ${toy}${battery !== undefined ? ` ${battery}%` : ''}${connected ? '' : ' — disconnected'}${focused ? ' ◀ focus' : ''}`,
-    noToys: '• no toys reported yet',
-    teaseOff: 'Tease off',
-    teaseOn: (detail: string, startedAt: number, by: string | null) =>
-      `**Tease on** at ${detail} · started ${rel(startedAt)}${by ? ` by ${userMention(by)}` : ''}`,
-    teasePaused: (detail: string, startedAt: number, by: string | null) =>
-      `**Tease paused** (app unreachable) at ${detail} · started ${rel(startedAt)}${by ? ` by ${userMention(by)}` : ''}`,
+    describe: 'Repost the live status here, pinned, and keep it updated',
+    /** Private reply: done. */
+    reposted: '📌 Status posted and pinned here. It will keep itself up to date.',
+    /** Private reply: posted, but the bot couldn't pin it. */
+    repostedUnpinned:
+      "📌 Status posted here, but I couldn't pin it. Give me the **Pin Messages** permission in this channel.",
+    /** Private reply: couldn't post at all. */
+    repostFailed:
+      "Couldn't post the status here. Check I can **View Channel** and **Send Messages** in this channel.",
   },
 
   // ===========================================================================
@@ -317,6 +315,34 @@ export const text = {
   },
 
   // ===========================================================================
+  // /timer — controller
+  // ===========================================================================
+  timer: {
+    describe: 'Set a named timer; I post here when it runs out',
+    describeName: 'What the timer is for',
+    describeDuration: 'How long: 10m, 1h30m, 45s, or minutes. 0 cancels a timer',
+
+    set: (name: string, dueAt: number) =>
+      `⏱️ Timer **${name}** set — goes off at ${at(dueAt)} (${rel(dueAt)}).`,
+    /** A timer with the same name was already running. */
+    replaced: (name: string, dueAt: number) =>
+      `⏱️ Timer **${name}** reset — now goes off at ${at(dueAt)} (${rel(dueAt)}).`,
+    cancelled: (name: string) => `⏱️ Timer **${name}** cancelled.`,
+    notFound: (name: string) => `There's no timer called **${name}**.`,
+    badDuration: (typed: string) =>
+      `Couldn't read "${typed}" as a duration. Try \`10m\`, \`1h30m\`, \`45s\`, or a number of minutes.`,
+    tooShort: 'Timers need to be at least 5 seconds.',
+    tooLong: 'Timers can be at most 7 days.',
+
+    /** Posted in the channel it was set in, pinging whoever set it. */
+    expired: (name: string, userId: string, setAt: number) =>
+      `⏰ ${userMention(userId)} — timer **${name}** is up. (Set ${rel(setAt)}.)`,
+    /** The same, when it went off while the bot was offline. */
+    expiredLate: (name: string, userId: string, setAt: number) =>
+      `⏰ ${userMention(userId)} — timer **${name}** is up. (Set ${rel(setAt)}; this is late — the bot was restarting.)`,
+  },
+
+  // ===========================================================================
   // A tease summary — used by /status, the board and the reminder
   // ===========================================================================
   /** "50% / 1.5s · 12 buzz(es) · 2 missed" */
@@ -327,11 +353,11 @@ export const text = {
   // The pinned status board in the command channel
   // ===========================================================================
   board: {
-    header: (updatedAt: number) => `**Shortwave — live status** · updated ${rel(updatedAt)}`,
+    header: (updatedAt: number) => `**Shortwave — Live Status** · updated ${rel(updatedAt)}`,
     /** Shown above everything while a /stop lockout runs. */
     stoppedBanner: (by: string, until: number) =>
-      `🛑 **Stopped by ${userMention(by)} — nothing can start ${rel(until)}.**`,
-    noLinks: '*No toys linked. Run `/connect` to link one.*',
+      `🛑 **Stopped by ${userMention(by)} — paused until ${at(until)} (${rel(until)}).**`,
+    noLinks: '*No Lovense Remote app is linked yet. Run `/connect` first.*',
     /** One per person. */
     person: (displayName: string, userId: string) => `**${displayName}** · ${userMention(userId)}`,
     toyLine: (dot: string, toy: string, battery: number | undefined, connected: boolean, focused: boolean) =>
@@ -366,7 +392,7 @@ export const text = {
   channel: {
     /** A QR code from /connect was scanned (first time, or re-paired). */
     connected: (user: string, toys: string) =>
-      `${userMention(user)} connected Lovense Remote (${toys}). Use \`/tease\` when ready.`,
+      `${userMention(user)} connected Lovense Remote (${toys}).`,
     /** In `connected`, when the app reported no toys. */
     noToysReported: 'no toys reported yet',
 
@@ -388,8 +414,8 @@ export const text = {
     /** Someone ran /stop somewhere other than the command channel. */
     stopRun: (user: string, channel: string, people: number, until: number | null, lifted: boolean) =>
       `🛑 ${userMention(user)} ran \`/stop\` in ${channelMention(channel)}. ` +
-      `All toys halted${people > 0 ? ` and tease turned off for ${people} person(s)` : ''}. ` +
-      (until !== null ? `Locked until ${rel(until)}.` : lifted ? 'Lockout lifted.' : 'No lockout.'),
+      `All toys stopped${people > 0 ? ` and tease turned off for ${people} person(s)` : ''}. ` +
+      (until !== null ? `Paused until ${at(until)} (${rel(until)}).` : lifted ? 'Pause lifted.' : 'No pause.'),
   },
 
   // ===========================================================================
@@ -404,21 +430,21 @@ export const text = {
       '1. **Force-quit** Lovense Remote: swipe up from the bottom, then swipe the app away. ' +
       "Just reopening it usually isn't enough.\n" +
       '2. Open it again and wait for the toy to reconnect.\n' +
-      '3. Run `/test` to check.',
+      '3. Run `/test` to confirm.',
     /** No contact from the app at all. */
     appClosed:
       "**Your toy isn't responding** — Lovense Remote seems to be closed, or your phone is offline.\n\n" +
       'To fix it:\n' +
       '1. Open Lovense Remote and check your toy is connected.\n' +
       '2. Make sure your phone has a data or Wi-Fi connection.\n' +
-      '3. Run `/test` to check.',
+      '3. Run `/test` to confirm.',
     /** The app answers but no toy is attached over Bluetooth. */
     bluetooth:
       "**Your toy isn't connected** — Lovense Remote is running, but no toy is connected to it.\n\n" +
       'To fix it:\n' +
       '1. Make sure the toy is switched on and charged.\n' +
       '2. In Lovense Remote, connect the toy (it should show as connected).\n' +
-      '3. Run `/test` to check.',
+      '3. Run `/test` to confirm.',
     /** Lovense no longer recognises the link. */
     unlinked:
       "**Your Lovense Remote isn't linked any more** — Lovense doesn't recognise the connection.\n\n" +
