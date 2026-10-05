@@ -42,6 +42,13 @@ shown on the pinned board instead of posted: the code, what it means, and a
 connection, the tease reminder, tease turning off after a long outage, and
 `/stop` run elsewhere. All of the wording lives in `src/text.ts`.
 
+**She is always the target; `/focus` picks the toys.** `/connect` links her
+Lovense Remote app, so every toy connected to it is usable. Commands act on
+her (`TARGET_USER_ID`) with no user option, except `/disconnect`. `/focus`
+sets which toys they reach — all connected toys, or one — and tease reads it
+at each message, so on "all" a toy connected mid-session joins in. This
+replaces phase 6's per-command `toy` option and per-toy tease strengths.
+
 **`/stop` stays.** It was missing from the requirements draft. Halts every toy,
 clears every mode, usable by anyone, no confirmation prompt. It is the
 safeword.
@@ -264,14 +271,15 @@ of a person's toys tease at the same settings, a trigger is still one
 untargeted command — exactly what a one-toy setup sent before — and only
 diverging settings produce one command per toy.
 
-**Check with two real toys before relying on it:**
+**Check with two real toys before relying on it** (with `/focus`, which
+replaced the per-command `toy` option):
 
-1. Both toys appear on the status board and in the `toy` suggestions.
-2. `/buzz toy:<one>` moves only that toy.
-3. `/tease toy:<one> intensity:20`, then `/tease toy:<other> intensity:80`:
-   one message buzzes both, each at its own strength, and neither command
-   cuts the other short.
-4. `/off toy:<one>` stops only that toy; the other keeps teasing.
+1. Both toys appear on the status board and in the `/focus` suggestions.
+2. `/focus <one>`, then `/buzz`: only that toy moves.
+3. `/focus All connected toys`, `/tease`, and post: both toys buzz from one
+   message, and neither cuts the other short.
+4. With tease on and focus on all, connect the second toy only now: the next
+   message buzzes it too.
 5. Switch one toy off: the board marks it ⚫ disconnected while the other
    stays 🟢.
 6. `/stop` halts both.

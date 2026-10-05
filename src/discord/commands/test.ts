@@ -4,9 +4,9 @@ import { explainCode, makeUid } from '../../lovense/client';
 import { isToyConnected, toyLabel } from '../../lovense/toys';
 import { sessions, type TestResult } from '../../session/manager';
 import { diagnose, presence } from '../../session/presence';
-import { store } from '../../store/store';
 import { text, type DmKind } from '../../text';
 import { dm } from '../dm';
+import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
 /**
@@ -31,8 +31,9 @@ export function dmKindFor(
 }
 
 /**
- * Is it working? Sends Vibrate:0 — nothing moves — to each connected toy and
- * reports, in the channel it was run in, what Lovense said for each.
+ * Is it working? Sends Vibrate:0 — nothing moves — to each of her connected
+ * toys (all of them, whatever the focus) and reports, in the channel it was
+ * run in, what Lovense said for each. Always tests her, whoever runs it.
  *
  * Zero strength, so it is allowed during a /stop lockout and can never
  * surprise anyone. A success also counts as the command that ends an outage.
@@ -43,28 +44,19 @@ export function dmKindFor(
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('test')
-    .setDescription(text.test.describe)
-    .addUserOption((o) => o.setName('target').setDescription(text.test.describeTarget)),
+    .setDescription(text.test.describe),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
 
-    const target = interaction.options.getUser('target') ?? interaction.user;
-    const self = target.id === interaction.user.id;
-    const link = store.getByUser(interaction.guildId, target.id);
-
-    if (!link) {
-      await interaction.reply(text.common.noToy(self, target.displayName));
-      return;
-    }
-    if (link.lastSeen === null) {
-      await interaction.reply(text.common.notScanned(self, target.displayName));
-      return;
-    }
+    const target = await requireTarget(interaction, { scanned: true });
+    if (!target) return;
+    const { link, self } = target;
+    const lastSeen = link.lastSeen!;
 
     await interaction.deferReply();
 
-    const uid = makeUid(interaction.guildId, target.id);
+    const uid = makeUid(interaction.guildId, target.userId);
     const source = `test:${interaction.user.id}`;
     const connected = link.toys.filter(isToyConnected);
     const lines: string[] = [];
@@ -109,12 +101,12 @@ export const command: BotCommand = {
         ? dmKindFor(firstFailure, why?.backgrounded ?? false)
         : null;
     if (kind && config.DM_ON_FAILED_TEST) {
-      const delivered = await dm(interaction.client, target.id, text.dm[kind]);
-      lines.push(delivered ? text.test.dmSent(target.id) : text.test.dmFailed(target.id));
+      const delivered = await dm(interaction.client, target.userId, text.dm[kind]);
+      lines.push(delivered ? text.test.dmSent(target.userId) : text.test.dmFailed(target.userId));
     }
 
     await interaction.editReply(
-      [text.test.heading(self, target.displayName), ...lines, text.test.footer(link.lastSeen)].join('\n'),
+      [text.test.heading(self, target.name), ...lines, text.test.footer(lastSeen)].join('\n'),
     );
   },
 };

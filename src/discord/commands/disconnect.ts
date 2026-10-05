@@ -16,12 +16,14 @@ export const command: BotCommand = {
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
     .setDescription(text.disconnect.describe)
-    .addUserOption((o) => o.setName('target').setDescription(text.disconnect.describeTarget)),
+    .addUserOption((o) =>
+      o.setName('target').setDescription(text.disconnect.describeTarget).setRequired(true),
+    ),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
 
-    const target = interaction.options.getUser('target') ?? interaction.user;
+    const target = interaction.options.getUser('target', true);
     const self = target.id === interaction.user.id;
     const uid = makeUid(interaction.guildId, target.id);
 

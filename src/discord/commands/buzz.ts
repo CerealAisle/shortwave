@@ -1,28 +1,22 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import * as actions from '../../lovense/actions';
 import { makeUid } from '../../lovense/client';
-import { failureText } from '../failure';
+import { focusTargets, getFocus } from '../../session/focus';
 import { sessions } from '../../session/manager';
-import { store } from '../../store/store';
-import { resolveToys } from '../../lovense/toys';
-import {
-  TOY_OPTION,
-  TOY_OPTION_DESCRIPTION,
-  respondWithToys,
-  toyNames,
-} from '../toy-option';
-import { refuseIfStopped } from '../lockout';
 import { text } from '../../text';
+import { failureText } from '../failure';
+import { refuseIfStopped } from '../lockout';
+import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
 /**
- * Manual one-off: vibrate at X% for X seconds.
+ * Manual one-off: vibrate her focused toys at X% for X seconds.
  *
  * This file is the template for new commands. The pattern is always:
- *   1. resolve the target link from the store, and the toy if one was named
+ *   1. find the target, and the toys the focus means right now
  *   2. build a ToyAction with a builder from lovense/actions
  *   3. hand it to sessions.sendNow() so it gets capped, logged and error-mapped
- *      — once with no toyId for every toy, or once per named toy
+ *      — once with no toyId for every toy, or once per focused toy
  * Then drop the file in this folder and run `npm run deploy-commands`.
  */
 export const command: BotCommand = {
@@ -46,45 +40,20 @@ export const command: BotCommand = {
         .setMinValue(1)
         .setMaxValue(300)
         .setRequired(true),
-    )
-    .addUserOption((o) =>
-      o.setName('target').setDescription(text.buzz.describeTarget),
-    )
-    .addStringOption((o) =>
-      o.setName(TOY_OPTION).setDescription(TOY_OPTION_DESCRIPTION).setAutocomplete(true),
     ),
-
-  async autocomplete(interaction) {
-    await respondWithToys(interaction, 'target');
-  },
 
   async execute(interaction) {
     if (!interaction.guildId) return;
     if (await refuseIfStopped(interaction)) return;
 
-    const target = interaction.options.getUser('target') ?? interaction.user;
-    const link = store.getByUser(interaction.guildId, target.id);
+    const target = await requireTarget(interaction);
+    if (!target) return;
 
-    if (!link) {
-      await interaction.reply({
-        content: text.common.noToy(target.id === interaction.user.id, target.displayName),
-        flags: MessageFlags.Ephemeral,
-      });
+    const targets = focusTargets(target.link, getFocus(interaction.guildId, target.userId));
+    if (!targets.ok) {
+      await interaction.reply({ content: text.buzz.cannot(targets.error), flags: MessageFlags.Ephemeral });
       return;
     }
-
-    // No toy named: one command to every toy, as before. Named: just that one.
-    const query = interaction.options.getString(TOY_OPTION);
-    const resolved = query ? resolveToys(link.toys, query) : null;
-    if (resolved && !resolved.ok) {
-      await interaction.reply({
-        content: text.buzz.badToy(resolved.error),
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-    const toyIds = resolved?.ok ? resolved.toys.map((t) => t.id) : [undefined];
-    const which = resolved?.ok ? toyNames(resolved.toys) : null;
 
     const intensity = interaction.options.getInteger('intensity', true);
     const seconds = interaction.options.getNumber('seconds', true);
@@ -92,15 +61,15 @@ export const command: BotCommand = {
     await interaction.deferReply();
 
     try {
-      for (const toyId of toyIds) {
+      for (const toyId of targets.toyIds ?? [undefined]) {
         await sessions.sendNow(
-          makeUid(interaction.guildId, target.id),
+          makeUid(interaction.guildId, target.userId),
           actions.vibrate(intensity, seconds),
           `buzz:${interaction.user.id}`,
           { toyId },
         );
       }
-      await interaction.editReply(text.buzz.sent(intensity, seconds, which));
+      await interaction.editReply(text.buzz.sent(intensity, seconds, targets.label));
     } catch (err) {
       await interaction.editReply(failureText(err));
     }

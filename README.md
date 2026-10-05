@@ -310,6 +310,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `DISCORD_TOKEN` | — | Bot token from the Discord portal |
 | `DISCORD_CLIENT_ID` | — | Application ID |
 | `DISCORD_GUILD_ID` | — | Your private server's ID |
+| `TARGET_USER_ID` | — | The person commands act on (her). Blank: whoever is linked, if only one person is |
 | `MAIN_CHANNEL_ID` | — | Shared channel; only messages here trigger buzzes |
 | `COMMAND_CHANNEL_ID` | — | Bot's home; all bot-initiated messages go here. Must differ from main |
 | `LOVENSE_TOKEN` | — | Lovense developer token |
@@ -355,8 +356,8 @@ checks that descriptions still fit Discord's limits.
 
 | Command | What it does |
 |---|---|
-| `/connect` | Ephemeral QR code to link your own toy |
-| `/test [target]` | Sends a 0% command to each connected toy — nothing moves — and posts which are responding, with what any error means. If one isn't, DMs its owner how to fix it. Defaults to yourself |
+| `/connect` | Ephemeral QR code to link your Lovense Remote app. Every toy connected to the app becomes usable |
+| `/test` | Sends a 0% command to each of her connected toys — nothing moves — and posts which are responding, with what any error means. If one isn't, DMs her how to fix it. Always tests her, whoever runs it |
 | `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`, 30). A later `/stop` replaces the timer; `duration:0` lifts it. Never gated. Tells the command channel when run elsewhere |
 
 **The controller** (anyone with Administrator, which includes the server
@@ -364,11 +365,12 @@ owner) also sees:
 
 | Command | What it does |
 |---|---|
-| `/tease [user] [toy] [intensity] [duration] [off]` | Tease on: others' messages buzz the toy. No expiry. Re-run for a toy already teasing to change its strength or length. With `off:True`, turns tease off for that user (or just that toy) and sends a stop, even during a `/stop` lockout |
-| `/buzz <intensity> <seconds> [target] [toy]` | One-off manual vibration |
-| `/pattern <name> [target] [toy]` | Play a named pattern from `patterns/`. The name autocompletes |
-| `/status` | Linked toys, battery, tease state, trigger counts |
-| `/disconnect [target]` | Delete a link from the bot. The wearer disconnects from the Lovense app instead |
+| `/focus <toy>` | Which of her toys tease, buzz and pattern reach: **All connected toys**, or one toy by name or nickname. Saved, and applies at once — including to tease already running |
+| `/tease [intensity] [duration] [off]` | Tease on: others' messages buzz her focused toys, decided at each message. No expiry. Re-run while on to change strength or length. `off:True` turns it off and sends a stop, even during a `/stop` lockout |
+| `/buzz <intensity> <seconds>` | One-off vibration on her focused toys |
+| `/pattern <name>` | Play a named pattern from `patterns/` on her focused toys. The name autocompletes |
+| `/status` | Linked toys, battery, focus, tease state, trigger counts |
+| `/disconnect <target>` | Delete someone's link from the bot. She disconnects from Lovense Remote instead |
 
 Controller commands are hidden with Discord's own default permission
 setting, so Discord enforces it: the wearer does not see them in the command
@@ -381,14 +383,23 @@ picker and cannot run them. Two things keep that true:
 
 `/connect` replies ephemerally because the QR code is a control credential.
 
-**More than one toy.** Every toy paired to a person's Lovense Remote app is
-listed under them, and `toy` picks one by nickname or model — it
-autocompletes from that person's toys. Leave it out and `/buzz` and
-`/pattern` go to all of them, `/tease` covers every connected toy, and
-`/tease off:True` turns all of them off. Tease strength, length and counts are per toy, so two
-toys can tease at different strengths; pausing is per person, because one
-phone carries all their toys. `/stop` has no toy option: it is the safeword
-and always stops everything.
+**Who and which toys.** Commands always act on one person — her —
+named by `TARGET_USER_ID` (or, if that's blank, whoever is linked, as long as
+only one person is). Nobody picks a user per command; only `/disconnect`
+takes one.
+
+`/connect` links her **Lovense Remote app**, not a toy, so every toy
+connected to the app is usable. The bot learns which toys those are from the
+app's check-ins (the dashboard's heartbeat), each of which lists every toy
+with its battery and Bluetooth state.
+
+`/focus` chooses which of them commands reach. On **All connected toys** (the
+default), `/buzz`, `/pattern` and each tease buzz go out as one command that
+Lovense delivers to every toy connected at that moment — so a toy she
+connects mid-session joins in. On one toy, they go to that toy only, and are
+refused (or, for tease, counted as missed) while it isn't connected; a toy
+that isn't the focus is never addressed. `/test` ignores the focus and checks
+every toy. `/stop` always stops everything.
 The pinned status post in the command channel is the ambient view; `/status`
 is the on-demand one.
 

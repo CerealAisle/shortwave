@@ -69,6 +69,9 @@ them into `.env` in Part 7.
    - a channel only you can see, where the bot posts its own notices
      → save as `COMMAND_CHANNEL_ID`
 
+4. Right-click **her** name → **Copy User ID**. Commands act on her.
+   → save as `TARGET_USER_ID`
+
 ---
 
 ## Part 3 — Configure the Lovense dashboard
@@ -655,7 +658,7 @@ In your Discord server, in the main channel:
 
 6. She runs `/test`. It should say her toy is responding, and nothing moves.
 
-7. **You** run `/tease user:@her`. You post in the main channel. She should
+7. **You** run `/tease`. You post in the main channel. She should
    feel a buzz within a second or so.
 
 8. Test the safeword: with tease on, **she** runs `/stop`. Everything halts,
@@ -673,7 +676,7 @@ sudo -u lovensebot sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/lovense-bot/.e
 sudo systemctl restart lovense-bot
 ```
 
-You turn tease on for her with `/tease user:@her`, and she uses her phone completely
+You turn tease on for her with `/tease`, and she uses her phone completely
 normally for a few hours. Meanwhile:
 
 ```bash

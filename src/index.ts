@@ -10,6 +10,7 @@ import { StatusBoard } from './discord/status-board';
 import { startCallbackServer } from './http/callback';
 import { toyLabel } from './lovense/toys';
 import { sessions } from './session/manager';
+import { focusLabel, getFocus } from './session/focus';
 import { presence } from './session/presence';
 import { prober } from './session/prober';
 import { store } from './store/store';
@@ -25,6 +26,7 @@ async function main() {
         status: presence.statusFor(link),
         since: presence.since(link.uid),
         session: sessions.get(link.guildId, link.discordUserId),
+        focus: getFocus(link.guildId, link.discordUserId),
       })),
     () => {
       const lock = sessions.lockout(config.DISCORD_GUILD_ID);
@@ -58,16 +60,13 @@ async function main() {
             : status?.presence === 'offline'
               ? text.channel.reminderUnreachable
               : text.channel.reminderUnknown;
-      const toys = [...session.toys.values()].map((t) =>
-        text.channel.reminderToy(
-          t.toyName,
-          describeTease(t),
-          t.startedBy === session.ownerId ? null : t.startedBy,
-        ),
+      const link = store.getByUid(session.uid);
+      const focus = focusLabel(getFocus(session.guildId, session.ownerId), link);
+      void notify(
+        client,
+        text.channel.reminder(session.ownerId, session.armedAt, describeTease(session), focus, reach),
+        { ping: false },
       );
-      void notify(client, text.channel.reminder(session.ownerId, session.armedAt, reach, toys), {
-        ping: false,
-      });
     }
   });
   sessions.onError(() => board.requestUpdate());

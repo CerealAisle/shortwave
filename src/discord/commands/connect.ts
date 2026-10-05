@@ -3,6 +3,7 @@ import { log } from '../../logger';
 import { LovenseError, lovense, makeUid } from '../../lovense/client';
 import { store } from '../../store/store';
 import { text } from '../../text';
+import { expectScan } from '../../session/pairing';
 import type { BotCommand } from '../types';
 
 export const command: BotCommand = {
@@ -30,6 +31,9 @@ export const command: BotCommand = {
         .setColor(0x5865f2);
 
       await interaction.editReply({ embeds: [embed] });
+      // The scan that follows is announced as a new pairing, even if this
+      // person was linked before.
+      expectScan(uid);
     } catch (err) {
       const message = err instanceof LovenseError ? err.message : (err as Error).message;
       log.error(`QR generation failed for ${uid}: ${message}`);

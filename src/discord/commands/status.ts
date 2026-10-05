@@ -1,34 +1,32 @@
 import { EmbedBuilder, SlashCommandBuilder, userMention } from 'discord.js';
 import { toyLabel } from '../../lovense/toys';
-import { sessions, type Session, type ToyTease } from '../../session/manager';
+import { focusLabel, getFocus, type Focus } from '../../session/focus';
+import { sessions, type Session } from '../../session/manager';
 import { isToyConnected, presence } from '../../session/presence';
 import { store, type ToyLink } from '../../store/store';
 import { text } from '../../text';
 import { describeTease } from '../toy-option';
 import type { BotCommand } from '../types';
 
-/** One line per toy: battery, connection, and its tease if any. */
-function toyLines(link: ToyLink, session: Session | undefined): string[] {
+/** One line per toy: battery, connection, and whether it is the focus. */
+function toyLines(link: ToyLink, focus: Focus): string[] {
   const lines = link.toys.map((t) =>
-    text.status.toyLine(toyLabel(t), t.battery, isToyConnected(t), teaseText(session?.toys.get(t.id), session)),
+    text.status.toyLine(
+      toyLabel(t),
+      t.battery,
+      isToyConnected(t),
+      focus.kind === 'toy' && focus.id === t.id,
+    ),
   );
-
-  // A toy still teasing that its app no longer lists (removed in the app).
-  for (const tease of session?.toys.values() ?? []) {
-    if (!link.toys.some((t) => t.id === tease.toyId)) {
-      lines.push(text.status.toyGone(tease.toyName, teaseText(tease, session)));
-    }
-  }
-
   return lines.length > 0 ? lines : [text.status.noToys];
 }
 
-function teaseText(tease: ToyTease | undefined, session: Session | undefined): string {
-  if (!tease || !session) return text.status.teaseOff;
-  const by = tease.startedBy === session.ownerId ? null : tease.startedBy;
+function teaseText(session: Session | undefined): string {
+  if (!session) return text.status.teaseOff;
+  const by = session.startedBy === session.ownerId ? null : session.startedBy;
   return session.state === 'suspended'
-    ? text.status.teasePaused(describeTease(tease), tease.armedAt, by)
-    : text.status.teaseOn(describeTease(tease), tease.armedAt, by);
+    ? text.status.teasePaused(describeTease(session), session.armedAt, by)
+    : text.status.teaseOn(describeTease(session), session.armedAt, by);
 }
 
 export const command: BotCommand = {
@@ -53,6 +51,7 @@ export const command: BotCommand = {
     for (const link of links) {
       const session = sessions.get(interaction.guildId, link.discordUserId);
       const status = presence.statusFor(link);
+      const focus = getFocus(interaction.guildId, link.discordUserId);
       const noHeartbeats =
         status.presence === 'unknown' && presence.enabled && link.lastSeen
           ? text.status.noHeartbeats
@@ -62,7 +61,9 @@ export const command: BotCommand = {
         text.status[status.presence] + noHeartbeats,
         text.status.app(link.platform),
         link.lastSeen ? text.status.lastCheckIn(link.lastSeen) : text.status.neverCheckedIn,
-        ...toyLines(link, session),
+        text.status.focus(focusLabel(focus, link)),
+        ...toyLines(link, focus),
+        teaseText(session),
       ];
 
       embed.addFields({

@@ -4,6 +4,7 @@ import { config } from '../config';
 import { log } from '../logger';
 import { deriveUserToken } from '../lovense/client';
 import type { LovenseCallbackBody, LovenseToy } from '../lovense/types';
+import { takeExpectedScan } from '../session/pairing';
 import { presence } from '../session/presence';
 import { store } from '../store/store';
 
@@ -11,7 +12,7 @@ export type ToyStatusListener = (payload: {
   uid: string;
   toys: LovenseToy[];
   platform: string | null;
-  /** True only for the pairing callback, false for every heartbeat after it. */
+  /** True for a pairing callback (first ever, or after /connect), false for heartbeats. */
   firstConnect: boolean;
   /** Callbacks received so far, including this one. */
   callbackCount: number;
@@ -77,7 +78,8 @@ export async function startCallbackServer(
     }
 
     const toys = parseToys(body.toys);
-    const firstConnect = link.lastSeen === null;
+    // The very first callback, or the first after a fresh /connect.
+    const firstConnect = takeExpectedScan(body.uid) || link.lastSeen === null;
 
     store.recordCallback(body.uid, toys, body.platform ?? null);
 

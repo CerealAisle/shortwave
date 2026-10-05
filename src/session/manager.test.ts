@@ -8,14 +8,13 @@ import * as actions from '../lovense/actions';
 import { LovenseError, lovense, makeUid } from '../lovense/client';
 import type { ToyAction } from '../lovense/types';
 import { store } from '../store/store';
+import { setFocus } from './focus';
 import {
   StopLockoutError,
   isZeroAction,
-  planTriggerSends,
   sessions,
   shouldPostReminder,
   type Session,
-  type ToyTease,
 } from './manager';
 
 /**
@@ -34,8 +33,8 @@ const OTHER = 'other';
 const WEARER_UID = makeUid(GUILD, WEARER);
 const OTHER_UID = makeUid(GUILD, OTHER);
 
-const LUSH = { id: 'lush1', name: 'Lush' };
-const HUSH = { id: 'hush1', name: 'Hush' };
+const LUSH = { id: 'lush1' };
+const HUSH = { id: 'hush1' };
 
 let sent: { uid: string; action: ToyAction; toyId?: string }[] = [];
 let failWith: Error | null = null;
@@ -66,42 +65,23 @@ after(() => {
   store.deleteLink(OTHER_UID);
 });
 
-function armWearer(toys = [LUSH], extra: { startedBy?: string; intensityPercent?: number } = {}) {
-  return sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER, toys, ...extra });
+function armWearer(extra: { startedBy?: string; intensityPercent?: number } = {}) {
+  return sessions.arm({ uid: WEARER_UID, guildId: GUILD, ownerId: WEARER, ...extra });
 }
 
 describe('the wearer can always stop', () => {
   it('ends tease someone else started on their toy', async () => {
-    // The case this whole file exists for: /tease user:<wearer> run by the
-    // other person, then turned off by the wearer.
-    armWearer([LUSH, HUSH], { startedBy: OTHER });
-    const result = sessions.disarm(GUILD, WEARER);
+    // The case this whole file exists for: tease started on her toys by the
+    // other person, then ended.
+    armWearer({ startedBy: OTHER });
+    const ended = sessions.disarm(GUILD, WEARER);
     await flush();
 
-    assert.deepEqual(result?.removed.map((t) => t.startedBy), [OTHER, OTHER]);
+    assert.equal(ended?.startedBy, OTHER);
     assert.equal(sessions.get(GUILD, WEARER), undefined);
     // One Stop to every toy, not one per toy that might miss one.
     assert.equal(stopsTo(WEARER_UID).length, 1);
     assert.equal(stopsTo(WEARER_UID)[0]!.toyId, undefined);
-  });
-
-  it('ends tease on one toy without touching the other', async () => {
-    armWearer([LUSH, HUSH], { startedBy: OTHER });
-    const result = sessions.disarm(GUILD, WEARER, { toyIds: [HUSH.id] });
-    await flush();
-
-    assert.equal(result?.ended, false);
-    assert.deepEqual([...sessions.get(GUILD, WEARER)!.toys.keys()], [LUSH.id]);
-    assert.deepEqual(stopsTo(WEARER_UID).map((c) => c.toyId), [HUSH.id]);
-  });
-
-  it('ends the session when its last toy is turned off', async () => {
-    armWearer([LUSH]);
-    const result = sessions.disarm(GUILD, WEARER, { toyIds: [LUSH.id] });
-    await flush();
-
-    assert.equal(result?.ended, true);
-    assert.equal(sessions.get(GUILD, WEARER), undefined);
   });
 
   it('disarm by the wearer ends their session and sends a Stop', async () => {
@@ -213,7 +193,7 @@ describe('the /stop lockout', () => {
   });
 
   it('turns tease triggers into misses rather than buzzes', async () => {
-    const { session } = armWearer([LUSH]);
+    const { session } = armWearer();
     sessions.lockOut(GUILD, 180_000, WEARER);
     assert.equal(await sessions.handleTrigger(session, 'test'), 'stopped');
     assert.equal(vibrations().length, 0);
@@ -316,26 +296,16 @@ describe('tease', () => {
     assert.equal(count, 0);
   });
 
-  it('running it again retunes a toy without resetting its count', () => {
-    const { session } = armWearer([LUSH]);
-    session.toys.get(LUSH.id)!.triggerCount = 7;
-    const { added, updated } = armWearer([LUSH], { intensityPercent: 80 });
+  it('running it again retunes without resetting the count', () => {
+    const { session } = armWearer();
+    session.triggerCount = 7;
+    const again = armWearer({ intensityPercent: 80 });
 
-    const lush = sessions.get(GUILD, WEARER)!.toys.get(LUSH.id)!;
-    assert.equal(added.length, 0);
-    assert.equal(updated.length, 1);
-    assert.equal(lush.intensityPercent, 80);
-    assert.equal(lush.durationSec, config.BUZZ_DURATION_SEC);
-    assert.equal(lush.triggerCount, 7);
-  });
-
-  it('adding a second toy leaves the first one as it was', () => {
-    armWearer([LUSH], { intensityPercent: 30 });
-    const { session, added } = armWearer([HUSH], { intensityPercent: 90 });
-
-    assert.deepEqual(added.map((t) => t.toyId), [HUSH.id]);
-    assert.equal(session.toys.get(LUSH.id)!.intensityPercent, 30);
-    assert.equal(session.toys.get(HUSH.id)!.intensityPercent, 90);
+    assert.equal(again.created, false);
+    assert.equal(again.session, session);
+    assert.equal(session.intensityPercent, 80);
+    assert.equal(session.durationSec, config.BUZZ_DURATION_SEC);
+    assert.equal(session.triggerCount, 7);
   });
 });
 
@@ -362,86 +332,69 @@ describe('shouldPostReminder', () => {
   });
 });
 
-describe('triggers with more than one toy', () => {
-  beforeEach(() => {
-    // The app reports both toys, connected.
-    store.recordCallback(
-      WEARER_UID,
-      [
-        { id: LUSH.id, name: 'lush', status: 1 },
-        { id: HUSH.id, name: 'hush', status: 1 },
-      ],
-      'ios',
-    );
-  });
+describe('tease follows the focus at each message', () => {
+  const lush = { id: LUSH.id, name: 'lush', nickName: 'Lush 3', status: 1 };
+  const hush = { id: HUSH.id, name: 'hush', status: 1 };
+  const checkIn = (toys: object[]) =>
+    store.recordCallback(WEARER_UID, toys as Parameters<typeof store.recordCallback>[1], 'ios');
 
-  it('sends one command to every toy when they share settings', async () => {
-    // Exactly what a one-toy setup has always sent: no toy ID at all.
-    const { session } = armWearer([LUSH, HUSH]);
+  beforeEach(() => checkIn([lush, hush]));
+  afterEach(() => store.deleteSetting(`focus:${GUILD}:${WEARER}`));
+
+  it('with focus on all, sends one command that reaches every connected toy', async () => {
+    const { session } = armWearer();
     assert.equal(await sessions.handleTrigger(session, 'test'), 'sent');
-
     assert.deepEqual(vibrations().map((c) => c.toyId), [undefined]);
-    assert.equal(session.toys.get(LUSH.id)!.triggerCount, 1);
-    assert.equal(session.toys.get(HUSH.id)!.triggerCount, 1);
+    assert.equal(session.triggerCount, 1);
   });
 
-  it('sends each toy its own strength when they differ', async () => {
-    armWearer([LUSH], { intensityPercent: 20 });
-    const { session } = armWearer([HUSH], { intensityPercent: 80 });
-    await sessions.handleTrigger(session, 'test');
-
-    const byToy = new Map(vibrations().map((c) => [c.toyId, c.action]));
-    assert.deepEqual([...byToy.keys()].sort(), [HUSH.id, LUSH.id].sort());
-    const lush = byToy.get(LUSH.id)!;
-    const hush = byToy.get(HUSH.id)!;
-    if (lush.kind !== 'function' || hush.kind !== 'function') return assert.fail();
-    assert.equal(lush.action, 'Vibrate:4');
-    assert.equal(hush.action, 'Vibrate:16');
+  it('includes a toy that connected after tease started', async () => {
+    // "All" is decided at each message, not when tease began. The untargeted
+    // command is what Lovense delivers to whatever is connected right then.
+    checkIn([lush]);
+    const { session } = armWearer();
+    checkIn([lush, hush]);
+    assert.equal(await sessions.handleTrigger(session, 'test'), 'sent');
+    assert.deepEqual(vibrations().map((c) => c.toyId), [undefined]);
   });
 
-  it('only buzzes the toys that are teasing', async () => {
-    const { session } = armWearer([HUSH]);
+  it('with focus on one toy, reaches only that toy — never one that just connected', async () => {
+    setFocus(GUILD, WEARER, { kind: 'toy', id: HUSH.id, label: 'hush' });
+    const { session } = armWearer();
     await sessions.handleTrigger(session, 'test');
     assert.deepEqual(vibrations().map((c) => c.toyId), [HUSH.id]);
   });
 
-  it('uses one rate-limit slot per message, however many toys it buzzes', async () => {
-    armWearer([LUSH], { intensityPercent: 20 });
-    const { session } = armWearer([HUSH], { intensityPercent: 80 });
+  it('a change of focus redirects tease that is already running', async () => {
+    const { session } = armWearer();
+    setFocus(GUILD, WEARER, { kind: 'toy', id: LUSH.id, label: 'Lush 3' });
+    await sessions.handleTrigger(session, 'test');
+    assert.deepEqual(vibrations().map((c) => c.toyId), [LUSH.id]);
+  });
+
+  it('counts a miss, and sends nothing, when the focused toy is disconnected', async () => {
+    setFocus(GUILD, WEARER, { kind: 'toy', id: HUSH.id, label: 'hush' });
+    checkIn([lush, { ...hush, status: 0 }]);
+    const { session } = armWearer();
+    assert.equal(await sessions.handleTrigger(session, 'test'), 'unfocused');
+    assert.equal(vibrations().length, 0);
+    assert.equal(session.missedCount, 1);
+  });
+
+  it('counts a miss when focus is all but no toy is connected', async () => {
+    // Presence already calls an app with no toy attached offline, so either
+    // guard may catch it. What matters: nothing is sent, and it's a miss.
+    checkIn([{ ...lush, status: 0 }, { ...hush, status: 0 }]);
+    const { session } = armWearer();
+    assert.notEqual(await sessions.handleTrigger(session, 'test'), 'sent');
+    assert.equal(vibrations().length, 0);
+    assert.equal(session.missedCount, 1);
+  });
+
+  it('uses one rate-limit slot per message', async () => {
+    const { session } = armWearer();
     assert.equal(await sessions.handleTrigger(session, 'first'), 'sent');
     assert.equal(await sessions.handleTrigger(session, 'second'), 'throttled');
   });
 });
 
-describe('planTriggerSends', () => {
-  const tease = (toyId: string, intensityPercent = 50): ToyTease => ({
-    toyId,
-    toyName: toyId,
-    startedBy: 'x',
-    intensityPercent,
-    durationSec: 1.5,
-    armedAt: 0,
-    triggerCount: 0,
-    missedCount: 0,
-  });
-
-  it('collapses to one untargeted command when it can', () => {
-    const plan = planTriggerSends([tease('a'), tease('b')], ['a', 'b']);
-    assert.deepEqual(plan.map((p) => p.toyId), [undefined]);
-  });
-
-  it('targets each toy when only some of the link\'s toys are teasing', () => {
-    const plan = planTriggerSends([tease('a')], ['a', 'b']);
-    assert.deepEqual(plan.map((p) => p.toyId), ['a']);
-  });
-
-  it('targets each toy when settings differ', () => {
-    const plan = planTriggerSends([tease('a', 20), tease('b', 80)], ['a', 'b']);
-    assert.deepEqual(plan.map((p) => p.toyId), ['a', 'b']);
-  });
-
-  it('targets each toy when the app has not said what toys it has', () => {
-    const plan = planTriggerSends([tease('a')], []);
-    assert.deepEqual(plan.map((p) => p.toyId), ['a']);
-  });
-});

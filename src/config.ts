@@ -17,6 +17,13 @@ const schema = z.object({
   // accepted in both and answer wherever they were run.
   MAIN_CHANNEL_ID: z.string().min(1),
   COMMAND_CHANNEL_ID: z.string().min(1),
+  // The person commands act on — the wearer. /tease, /buzz, /pattern, /focus
+  // and /test all target them, whoever runs the command. Optional: unset, it
+  // is whoever is linked, as long as that is exactly one person.
+  TARGET_USER_ID: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
 
   LOVENSE_TOKEN: z.string().min(1),
   USER_TOKEN_SALT: z.string().min(16, 'must be at least 16 chars'),

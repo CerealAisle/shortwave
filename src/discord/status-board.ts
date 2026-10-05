@@ -9,7 +9,8 @@ import {
 import { config } from '../config';
 import { log } from '../logger';
 import { toyLabel } from '../lovense/toys';
-import type { Session, ToyTease } from '../session/manager';
+import { focusLabel, type Focus } from '../session/focus';
+import type { Session } from '../session/manager';
 import { diagnose, isToyConnected, type PresenceStatus } from '../session/presence';
 import type { ToyLink } from '../store/store';
 import { explainCode } from '../lovense/client';
@@ -29,6 +30,8 @@ export interface BoardRow {
   /** When the link entered its current presence state, if known. */
   since: number | null;
   session: Session | undefined;
+  /** Which of their toys commands reach. */
+  focus: Focus;
 }
 
 function formatDuration(ms: number): string {
@@ -65,12 +68,12 @@ function reachability(row: BoardRow): string {
   }
 }
 
-function teaseText(tease: ToyTease | undefined, session: Session | undefined, now: number): string {
-  if (!tease || !session) return text.board.teaseOff;
-  const running = formatDuration(now - tease.armedAt);
+function teaseText(session: Session | undefined, now: number): string {
+  if (!session) return text.board.teaseOff;
+  const running = formatDuration(now - session.armedAt);
   return session.state === 'suspended'
-    ? text.board.teasePaused(describeTease(tease), running)
-    : text.board.teaseOn(describeTease(tease), running);
+    ? text.board.teasePaused(describeTease(session), running)
+    : text.board.teaseOn(describeTease(session), running);
 }
 
 /**
@@ -88,29 +91,22 @@ export function renderBoardBody(
 
   return top + rows
     .map((row) => {
-      const { link, status, session } = row;
+      const { link, status, session, focus } = row;
       const dot = { online: '🟢', offline: '🔴', unknown: '⚪' }[status.presence];
 
-      // One line per toy, each with its own tease state. A toy the app says
-      // is disconnected gets its own mark: the phone can be fine while one
-      // toy's Bluetooth has dropped.
+      // One line per toy. A toy the app says is disconnected gets its own
+      // mark: the phone can be fine while one toy's Bluetooth has dropped.
       const toys = link.toys.map((t) => {
         const connected = isToyConnected(t);
-        const tease = teaseText(session?.toys.get(t.id), session, now);
-        return text.board.toyLine(connected ? dot : '⚫', toyLabel(t), t.battery, connected, tease);
+        const focused = focus.kind === 'toy' && focus.id === t.id;
+        return text.board.toyLine(connected ? dot : '⚫', toyLabel(t), t.battery, connected, focused);
       });
-
-      // Still teasing, but the app no longer lists it.
-      for (const tease of session?.toys.values() ?? []) {
-        if (!link.toys.some((t) => t.id === tease.toyId)) {
-          toys.push(text.board.toyGone(tease.toyName, teaseText(tease, session, now)));
-        }
-      }
       if (toys.length === 0) toys.push(text.board.noToys(dot));
 
       return [
         text.board.person(link.displayName, link.discordUserId),
         ...toys.map((t) => `> ${t}`),
+        `> ${text.board.focusAndTease(focusLabel(focus, link), teaseText(session, now))}`,
         `> ${reachability(row)}`,
       ].join('\n');
     })
