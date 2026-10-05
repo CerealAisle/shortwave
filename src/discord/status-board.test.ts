@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Session, ToyTease } from '../session/manager';
+import type { Session } from '../session/manager';
 import type { PresenceStatus } from '../session/presence';
 import { RateLimiter } from '../session/rate-limiter';
 import type { ToyLink } from '../store/store';
@@ -39,37 +39,28 @@ function row(over: Partial<BoardRow> = {}, status: Partial<PresenceStatus> = {})
     },
     since: null,
     session: undefined,
+    focus: { kind: 'all' },
     ...over,
   };
 }
 
-function tease(over: Partial<ToyTease> = {}): ToyTease {
-  return {
-    toyId: 't1',
-    toyName: 'Lush 3',
-    startedBy: '222',
-    intensityPercent: 50,
-    durationSec: 1.5,
-    armedAt: NOW - (2 * 60 + 14) * 60_000,
-    triggerCount: 12,
-    missedCount: 0,
-    ...over,
-  };
-}
-
-function session(over: Partial<Session> = {}, teases: ToyTease[] = [tease()]): Session {
+function session(over: Partial<Session> = {}): Session {
   return {
     uid: 'g:u',
     guildId: 'g',
     ownerId: '111',
+    startedBy: '222',
     state: 'armed',
+    intensityPercent: 50,
+    durationSec: 1.5,
     armedAt: NOW - (2 * 60 + 14) * 60_000,
     suspendedAt: null,
     limiter: new RateLimiter(0, 100),
     lastReminderAt: NOW,
     reminderTimer: null,
     graceTimer: null,
-    toys: new Map(teases.map((t) => [t.toyId, t])),
+    triggerCount: 12,
+    missedCount: 0,
     ...over,
   };
 }
@@ -79,7 +70,7 @@ describe('renderBoardBody', () => {
     const body = renderBoardBody([row()], NOW);
     assert.match(body, /\*\*Daddy\*\* · <@111>/);
     assert.match(body, /🟢 Lush 3 · 87%/);
-    assert.match(body, /reachable, probed <t:\d+:R>/);
+    assert.match(body, /reachable, checked <t:\d+:R>/);
     assert.match(body, /tease off/);
   });
 
@@ -94,7 +85,7 @@ describe('renderBoardBody', () => {
       NOW,
     );
     assert.match(body, /🔴 Lush 3/);
-    assert.match(body, /unreachable since <t:\d+:R> — Lovense Remote is not reachable \(507\)/);
+    assert.match(body, /unreachable since <t:\d+:R> — Lovense Remote isn't reachable \(507\)/);
   });
 
   it('names a backgrounded app: heartbeats arriving but commands refused', () => {
@@ -121,7 +112,17 @@ describe('renderBoardBody', () => {
       [row({}, { presence: 'offline', lastResult: { at: NOW, ok: false, code: 503 } })],
       NOW,
     );
-    assert.match(body, /does not know this link — run \/connect again \(503\)/);
+    assert.match(body, /doesn't know this link — run \/connect again \(503\)/);
+  });
+
+  it('shows the last failed command while the app is still checking in', () => {
+    // Online on check-ins alone, so the failure would otherwise go unseen —
+    // and the bot no longer posts errors to the channel.
+    const body = renderBoardBody(
+      [row({}, { presence: 'online', lastResult: { at: NOW - 30_000, ok: false, code: 400 } })],
+      NOW,
+    );
+    assert.match(body, /reachable \(app checking in\) · last command failed <t:\d+:R>: Lovense rejected/);
   });
 
   it('puts a banner, such as a /stop lockout, above everything', () => {
@@ -168,10 +169,11 @@ describe('renderBoardBody with two toys', () => {
       session: sess,
     });
 
-  it('gives each toy its own line and its own tease state', () => {
+  it('gives each toy its own line, and shows the focus and tease under them', () => {
     const body = renderBoardBody([two(session())], NOW);
-    assert.match(body, /🟢 Lush 3 · 87% — tease on at 50%/);
-    assert.match(body, /Hush 2 · 41% · disconnected — tease off/);
+    assert.match(body, /🟢 Lush 3 · 87%/);
+    assert.match(body, /Hush 2 · 41% · disconnected/);
+    assert.match(body, /focus: all connected toys · tease on at 50%/);
   });
 
   it('marks a disconnected toy even while the phone is reachable', () => {
@@ -180,10 +182,14 @@ describe('renderBoardBody with two toys', () => {
     assert.doesNotMatch(body, /🟢 Hush 2/);
   });
 
-  it('still shows a teasing toy the app has stopped listing', () => {
-    const gone = tease({ toyId: 'gone', toyName: 'Old Toy' });
-    const body = renderBoardBody([two(session({}, [tease(), gone]))], NOW);
-    assert.match(body, /Old Toy · not reported — tease on/);
+  it('marks the focused toy, and names it in the focus line', () => {
+    const body = renderBoardBody(
+      [{ ...two(), focus: { kind: 'toy', id: 't2', label: 'Hush 2' } }],
+      NOW,
+    );
+    assert.match(body, /Hush 2 · 41% · disconnected ◀ focus/);
+    assert.doesNotMatch(body, /Lush 3 · 87% ◀ focus/);
+    assert.match(body, /focus: Hush 2 · tease off/);
   });
 });
 

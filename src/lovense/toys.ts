@@ -1,3 +1,4 @@
+import { text } from '../text';
 import type { LovenseToy } from './types';
 
 /**
@@ -32,12 +33,7 @@ function listing(toys: LovenseToy[]): string {
  */
 export function resolveToys(toys: LovenseToy[], query: string | null | undefined): ToyResolution {
   if (toys.length === 0) {
-    return {
-      ok: false,
-      error:
-        'the Lovense app has not reported any toys yet. Open Lovense Remote with the toy ' +
-        'connected and wait for it to check in',
-    };
+    return { ok: false, error: text.toy.noneReported };
   }
 
   const q = query?.trim().toLowerCase();
@@ -54,13 +50,10 @@ export function resolveToys(toys: LovenseToy[], query: string | null | undefined
   );
   if (byName.length === 1) return { ok: true, toys: byName };
   if (byName.length > 1) {
-    return {
-      ok: false,
-      error: `more than one toy is called "${query}". Pick it from the suggestions instead`,
-    };
+    return { ok: false, error: text.toy.ambiguous(query ?? '') };
   }
 
-  return { ok: false, error: `no toy called "${query}". Toys: ${listing(toys)}` };
+  return { ok: false, error: text.toy.notFound(query ?? '', listing(toys)) };
 }
 
 /** Autocomplete suggestions: label shown, toy ID sent. */
@@ -71,7 +64,7 @@ export function toyChoices(toys: LovenseToy[], typed: string): { name: string; v
     .slice(0, 25)
     .map((t) => {
       const battery = t.battery !== undefined ? ` · ${t.battery}%` : '';
-      const off = isToyConnected(t) ? '' : ' · disconnected';
+      const off = isToyConnected(t) ? '' : text.toy.disconnectedSuffix;
       return { name: `${toyLabel(t)}${battery}${off}`.slice(0, 100), value: t.id };
     });
 }

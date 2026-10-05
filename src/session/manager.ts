@@ -4,26 +4,25 @@ import { LovenseError, lovense } from '../lovense/client';
 import * as actions from '../lovense/actions';
 import { describeAction, type ToyAction } from '../lovense/types';
 import { store } from '../store/store';
+import { focusTargets, getFocus } from './focus';
 import { presence } from './presence';
 import { RateLimiter } from './rate-limiter';
 
 /**
  * A session is tease mode for one person: while it exists, messages from
- * anyone else in the main channel buzz the toys it lists.
+ * anyone else in the main channel buzz their toys.
  *
- * Two levels, because two things vary at different grains:
- *  - The session (per guild + owner) holds what is true of the phone:
- *    paused or not, the grace window, the rate limit and the reminder. One
- *    Lovense Remote app carries all of a person's toys, so when it drops,
- *    they all drop together.
- *  - Each ToyTease (per toy within it) holds what can differ between toys:
- *    strength, length, who started it, and its counts.
+ * Which toys is not stored here. Every trigger asks the focus (/focus) at
+ * that moment: with focus on all, every toy connected right then; on one
+ * toy, just that one. So a toy connected mid-session joins in, and changing
+ * the focus redirects tease already running.
  *
  * `armed`     - triggers fire.
- * `suspended` - the toy went offline; triggers are ignored, but the session
- *               is intact and resumes by itself if the toy comes back inside
+ * `suspended` - the app went offline; triggers are ignored, but the session
+ *               is intact and resumes by itself if it comes back inside
  *               OFFLINE_GRACE_SEC. Only when that window closes is the
- *               session disarmed for real.
+ *               session disarmed for real. One Lovense Remote app carries
+ *               all of a person's toys, so this is per person, not per toy.
  *
  * The suspended state exists because iOS suspends background apps. Over a
  * multi-hour session a few minutes of silence is normal, and ending the
@@ -31,27 +30,16 @@ import { RateLimiter } from './rate-limiter';
  */
 export type SessionState = 'armed' | 'suspended';
 
-export interface ToyTease {
-  toyId: string;
-  /** Label at the time tease started, for messages if the toy later vanishes. */
-  toyName: string;
-  /** Who ran `/tease` for this toy. Often not the owner. */
-  startedBy: string;
-  intensityPercent: number;
-  durationSec: number;
-  armedAt: number;
-  triggerCount: number;
-  /** Triggers dropped because the toy was offline or the session suspended. */
-  missedCount: number;
-}
-
 export interface Session {
   uid: string;
   guildId: string;
   /** Discord user who owns the toys. Their own messages never trigger them. */
   ownerId: string;
+  /** Who ran `/tease`. */
+  startedBy: string;
   state: SessionState;
-  /** When the first toy in this session started. */
+  intensityPercent: number;
+  durationSec: number;
   armedAt: number;
   suspendedAt: number | null;
   limiter: RateLimiter;
@@ -59,24 +47,9 @@ export interface Session {
   lastReminderAt: number;
   reminderTimer: NodeJS.Timeout | null;
   graceTimer: NodeJS.Timeout | null;
-  /** Keyed by toy ID, in the order tease started on them. Never empty. */
-  toys: Map<string, ToyTease>;
-}
-
-/** Buzzes and misses summed over every toy in the session. */
-export function sessionTotals(session: Session): { buzzes: number; missed: number } {
-  let buzzes = 0;
-  let missed = 0;
-  for (const t of session.toys.values()) {
-    buzzes += t.triggerCount;
-    missed += t.missedCount;
-  }
-  return { buzzes, missed };
-}
-
-export interface ToyRef {
-  id: string;
-  name: string;
+  triggerCount: number;
+  /** Triggers dropped: app offline, session suspended, or focus not connected. */
+  missedCount: number;
 }
 
 export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
@@ -89,22 +62,6 @@ export type SessionEventListener = (payload: {
 export type ErrorListener = (payload: { session: Session; error: Error }) => void;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Whether a due reminder should be posted. The one case it is skipped: the
- * session was already paused when this interval began, so the "paused"
- * notice has gone out and the whole interval was spent unreachable. One
- * message about a dead link is enough.
- */
-export function shouldPostReminder(
-  session: Pick<Session, 'state' | 'suspendedAt' | 'lastReminderAt'>,
-): boolean {
-  return !(
-    session.state === 'suspended' &&
-    session.suspendedAt !== null &&
-    session.suspendedAt <= session.lastReminderAt
-  );
-}
 
 /**
  * A command that moves nothing: Stop, or every motor at level 0 (the probe,
@@ -141,29 +98,19 @@ export class StopLockoutError extends Error {
 export type TestResult = { ok: true } | { ok: false; code: number | undefined; message: string };
 
 /**
- * Which commands a trigger turns into. When every teased toy shares one
- * strength and length and they are all of the link's toys, that is a single
- * command with no toy ID — exactly what a one-toy setup has always sent.
- * Otherwise one command per toy, each at its own settings.
+ * Whether a due reminder should be posted. The one case it is skipped: the
+ * session was already paused when this interval began, so the whole interval
+ * was spent unreachable and the reminder would only repeat what the pinned
+ * board already shows.
  */
-export function planTriggerSends(
-  teases: ToyTease[],
-  linkToyIds: string[],
-): { toyId: string | undefined; teases: ToyTease[] }[] {
-  const first = teases[0];
-  if (!first) return [];
-
-  const uniform = teases.every(
-    (t) => t.intensityPercent === first.intensityPercent && t.durationSec === first.durationSec,
+export function shouldPostReminder(
+  session: Pick<Session, 'state' | 'suspendedAt' | 'lastReminderAt'>,
+): boolean {
+  return !(
+    session.state === 'suspended' &&
+    session.suspendedAt !== null &&
+    session.suspendedAt <= session.lastReminderAt
   );
-  const teased = new Set(teases.map((t) => t.toyId));
-  const coversLink =
-    linkToyIds.length > 0 &&
-    linkToyIds.length === teased.size &&
-    linkToyIds.every((id) => teased.has(id));
-
-  if (uniform && coversLink) return [{ toyId: undefined, teases }];
-  return teases.map((t) => ({ toyId: t.toyId, teases: [t] }));
 }
 
 /**
@@ -237,73 +184,53 @@ export class SessionManager {
   }
 
   /**
-   * Start tease on some of a person's toys. Toys already teasing are retuned
-   * in place — only the strength and length given change, and their counts
-   * carry on — so running /tease again adjusts rather than restarts.
+   * Start tease for a person. Already on: only the strength and length given
+   * change, and the count, elapsed time and reminder schedule carry on — so
+   * running /tease again adjusts rather than restarts.
    */
   arm(params: {
     uid: string;
     guildId: string;
     ownerId: string;
-    toys: ToyRef[];
     startedBy?: string;
     intensityPercent?: number;
     durationSec?: number;
-  }): { session: Session; added: ToyTease[]; updated: ToyTease[] } {
-    if (params.toys.length === 0) throw new Error('arm needs at least one toy');
+  }): { session: Session; created: boolean } {
+    const key = this.key(params.guildId, params.ownerId);
+    const existing = this.sessions.get(key);
+
+    if (existing) {
+      if (params.intensityPercent !== undefined) existing.intensityPercent = params.intensityPercent;
+      if (params.durationSec !== undefined) existing.durationSec = params.durationSec;
+      log.info(
+        `Tease retuned for ${params.ownerId}: ${existing.intensityPercent}% / ${existing.durationSec}s`,
+      );
+      return { session: existing, created: false };
+    }
 
     const now = Date.now();
-    const key = this.key(params.guildId, params.ownerId);
-    let session = this.sessions.get(key);
+    const session: Session = {
+      uid: params.uid,
+      guildId: params.guildId,
+      ownerId: params.ownerId,
+      startedBy: params.startedBy ?? params.ownerId,
+      state: 'armed',
+      intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
+      durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,
+      armedAt: now,
+      suspendedAt: null,
+      limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
+      lastReminderAt: now,
+      reminderTimer: null,
+      graceTimer: null,
+      triggerCount: 0,
+      missedCount: 0,
+    };
 
-    if (!session) {
-      session = {
-        uid: params.uid,
-        guildId: params.guildId,
-        ownerId: params.ownerId,
-        state: 'armed',
-        armedAt: now,
-        suspendedAt: null,
-        limiter: new RateLimiter(config.MIN_COMMAND_INTERVAL_MS, config.MAX_COMMANDS_PER_MINUTE),
-        lastReminderAt: now,
-        reminderTimer: null,
-        graceTimer: null,
-        toys: new Map(),
-      };
-      this.sessions.set(key, session);
-      this.scheduleReminder(session);
-    }
-
-    const added: ToyTease[] = [];
-    const updated: ToyTease[] = [];
-
-    for (const toy of params.toys) {
-      const existing = session.toys.get(toy.id);
-      if (existing) {
-        if (params.intensityPercent !== undefined) existing.intensityPercent = params.intensityPercent;
-        if (params.durationSec !== undefined) existing.durationSec = params.durationSec;
-        updated.push(existing);
-        continue;
-      }
-      const tease: ToyTease = {
-        toyId: toy.id,
-        toyName: toy.name,
-        startedBy: params.startedBy ?? params.ownerId,
-        intensityPercent: params.intensityPercent ?? config.BUZZ_INTENSITY_PERCENT,
-        durationSec: params.durationSec ?? config.BUZZ_DURATION_SEC,
-        armedAt: now,
-        triggerCount: 0,
-        missedCount: 0,
-      };
-      session.toys.set(toy.id, tease);
-      added.push(tease);
-    }
-
-    log.info(
-      `Tease for ${params.ownerId}: ${added.length} toy(s) on, ${updated.length} retuned ` +
-        `(by ${params.startedBy ?? params.ownerId})`,
-    );
-    return { session, added, updated };
+    this.sessions.set(key, session);
+    this.scheduleReminder(session);
+    log.info(`Tease on for ${params.ownerId} (started by ${session.startedBy})`);
+    return { session, created: true };
   }
 
   /**
@@ -377,7 +304,9 @@ export class SessionManager {
     const session = this.sessions.get(this.key(guildId, ownerId));
     if (!session || session.state !== 'suspended') return undefined;
 
+    if (session.reminderTimer) clearTimeout(session.reminderTimer);
     if (session.graceTimer) clearTimeout(session.graceTimer);
+    session.reminderTimer = null;
     session.graceTimer = null;
     session.state = 'armed';
     session.suspendedAt = null;
@@ -391,50 +320,27 @@ export class SessionManager {
     return session;
   }
 
-  /**
-   * Turn tease off and send a Stop. Always safe to call, armed or not.
-   *
-   * With `toyIds`, only those toys stop and the rest keep teasing; the
-   * session ends when its last toy does. Without, every toy stops.
-   */
+  /** Turn tease off and send a Stop to every toy. Always safe to call. */
   disarm(
     guildId: string,
     ownerId: string,
-    opts: { silent?: boolean; toyIds?: string[] } = {},
-  ): { session: Session; removed: ToyTease[]; ended: boolean } | undefined {
-    const key = this.key(guildId, ownerId);
-    const session = this.sessions.get(key);
+    opts: { silent?: boolean } = {},
+  ): Session | undefined {
+    const session = this.sessions.get(this.key(guildId, ownerId));
     if (!session) return undefined;
 
-    const all = opts.toyIds === undefined;
-    const removed: ToyTease[] = [];
-    for (const [id, tease] of session.toys) {
-      if (all || opts.toyIds!.includes(id)) removed.push(tease);
-    }
-    for (const t of removed) session.toys.delete(t.toyId);
+    this.clearTimers(session);
+    this.sessions.delete(this.key(guildId, ownerId));
 
-    const ended = session.toys.size === 0;
-    if (ended) {
-      this.clearTimers(session);
-      this.sessions.delete(key);
+    if (!opts.silent) {
+      log.info(`Tease off for ${ownerId} (${session.triggerCount} triggers)`);
     }
 
-    if (!opts.silent && removed.length > 0) {
-      log.info(`Tease off for ${ownerId}: ${removed.length} toy(s)${ended ? ', session ended' : ''}`);
-    }
+    void this.sendNow(session.uid, actions.stop(), 'disarm').catch((err) => {
+      log.warn(`Stop after disarm failed: ${(err as Error).message}`);
+    });
 
-    const onStopFailed = (err: Error) => log.warn(`Stop after disarm failed: ${err.message}`);
-    if (all) {
-      void this.sendNow(session.uid, actions.stop(), 'disarm').catch(onStopFailed);
-    } else {
-      for (const t of removed) {
-        void this.sendNow(session.uid, actions.stop(), 'disarm', { toyId: t.toyId }).catch(
-          onStopFailed,
-        );
-      }
-    }
-
-    return { session, removed, ended };
+    return session;
   }
 
   /** Panic path: disarm every session in the guild and stop every toy. */
@@ -480,14 +386,18 @@ export class SessionManager {
   }
 
   /**
-   * Block anything that moves for `ms`. A new /stop can only extend the
-   * lockout, never shorten it: it is the wearer's guarantee, and nobody else
-   * should be able to cut it short with a /stop of their own.
+   * Block anything that moves for `ms` from now, replacing any lockout
+   * already running — so a later /stop can shorten one as well as extend
+   * it, and `ms` of 0 lifts it. Either person can; the agreement about when
+   * that is OK lives between them, not in the bot.
    */
   lockOut(guildId: string, ms: number, by: string, now = Date.now()): Lockout | null {
-    const current = this.lockout(guildId, now);
-    if (ms <= 0) return current;
-    if (current && current.until >= now + ms) return current;
+    if (ms <= 0) {
+      if (this.lockout(guildId, now)) log.warn(`Stop lockout for guild ${guildId} lifted by ${by}`);
+      this.lockouts.set(guildId, null);
+      store.deleteSetting(this.lockoutKey(guildId));
+      return null;
+    }
 
     const next: Lockout = { until: now + ms, by };
     this.lockouts.set(guildId, next);
@@ -503,29 +413,38 @@ export class SessionManager {
   async handleTrigger(
     session: Session,
     source: string,
-  ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'stopped' | 'failed'> {
-    const teases = [...session.toys.values()];
-    const missAll = () => teases.forEach((t) => (t.missedCount += 1));
-
+  ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'stopped' | 'unfocused' | 'failed'> {
     // /stop turns tease off, so this is a backstop, not the main guard.
     if (this.lockout(session.guildId)) {
-      missAll();
+      session.missedCount += 1;
       return 'stopped';
     }
 
     if (session.state === 'suspended') {
-      missAll();
+      session.missedCount += 1;
       return 'suspended';
     }
 
-    // Skip known-offline toys before spending a rate-limit slot or an API
+    // Skip known-offline apps before spending a rate-limit slot or an API
     // call. The presence sweep will suspend the session shortly; this avoids
     // doomed requests in the meantime.
     const status = presence.statusForUid(session.uid);
     if (status?.presence === 'offline') {
-      missAll();
-      log.debug(`Trigger skipped for ${session.ownerId}: toy offline`);
+      session.missedCount += 1;
+      log.debug(`Trigger skipped for ${session.ownerId}: app offline`);
       return 'offline';
+    }
+
+    // Which toys, decided now from the latest check-in: a toy that connected
+    // since tease started is included, a focused toy that dropped is not.
+    const link = store.getByUid(session.uid);
+    const targets = link
+      ? focusTargets(link, getFocus(session.guildId, session.ownerId))
+      : ({ ok: true, toyIds: undefined, label: '' } as const);
+    if (!targets.ok) {
+      session.missedCount += 1;
+      log.debug(`Trigger skipped for ${session.ownerId}: ${targets.error}`);
+      return 'unfocused';
     }
 
     // One slot per message, however many toys it buzzes.
@@ -535,24 +454,18 @@ export class SessionManager {
       return 'throttled';
     }
 
-    const linkToyIds = store.getByUid(session.uid)?.toys.map((t) => t.id) ?? [];
-    const results = await Promise.allSettled(
-      planTriggerSends(teases, linkToyIds).map(async ({ toyId, teases: group }) => {
-        const action = actions.vibrate(group[0]!.intensityPercent, group[0]!.durationSec);
-        try {
-          await this.sendWithWakeRetry(session.uid, action, source, toyId);
-          group.forEach((t) => (t.triggerCount += 1));
-        } catch (err) {
-          group.forEach((t) => (t.missedCount += 1));
-          throw err;
-        }
-      }),
-    );
-
-    const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-    // One notice per trigger, not one per toy.
-    if (failures.length > 0) this.emitError(session, failures[0]!.reason as Error);
-    return failures.length < results.length ? 'sent' : 'failed';
+    const action = actions.vibrate(session.intensityPercent, session.durationSec);
+    try {
+      for (const toyId of targets.toyIds ?? [undefined]) {
+        await this.sendWithWakeRetry(session.uid, action, source, toyId);
+      }
+      session.triggerCount += 1;
+      return 'sent';
+    } catch (err) {
+      session.missedCount += 1;
+      this.emitError(session, err as Error);
+      return 'failed';
+    }
   }
 
   /**
@@ -625,7 +538,7 @@ export class SessionManager {
     } catch (err) {
       const code = err instanceof LovenseError ? err.code : undefined;
       if (code !== undefined) presence.markReportedOffline(uid, code);
-      else presence.noteInconclusive(uid);
+      else presence.noteFailed(uid, undefined);
       return { ok: false, code, message: (err as Error).message };
     }
   }
@@ -682,6 +595,11 @@ export class SessionManager {
 
       const message = err instanceof LovenseError ? err.message : (err as Error).message;
       store.logCommand({ uid, description, source, ok: false, error: message });
+      // Recorded so the status board can show the last failure and what it
+      // means. Teardown Stops to a toy that is already gone don't count.
+      if (!TEARDOWN_SOURCES.includes(source)) {
+        presence.noteFailed(uid, err instanceof LovenseError ? err.code : undefined);
+      }
       // A dead link would otherwise log a probe failure every interval; the
       // presence transition already says it once.
       (isProbe ? log.debug : log.warn)(`Lovense command failed (${source}): ${message}`);

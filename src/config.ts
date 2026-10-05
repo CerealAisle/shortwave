@@ -8,7 +8,7 @@ const bool = z
   .optional()
   .transform((v) => v === 'true' || v === '1');
 
-const schema = z.object({
+const fields = z.object({
   DISCORD_TOKEN: z.string().min(1),
   DISCORD_CLIENT_ID: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1),
@@ -17,6 +17,13 @@ const schema = z.object({
   // accepted in both and answer wherever they were run.
   MAIN_CHANNEL_ID: z.string().min(1),
   COMMAND_CHANNEL_ID: z.string().min(1),
+  // The person commands act on — the wearer. /tease, /buzz, /pattern, /focus
+  // and /test all target them, whoever runs the command. Optional: unset, it
+  // is whoever is linked, as long as that is exactly one person.
+  TARGET_USER_ID: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
 
   LOVENSE_TOKEN: z.string().min(1),
   USER_TOKEN_SALT: z.string().min(16, 'must be at least 16 chars'),
@@ -42,9 +49,9 @@ const schema = z.object({
   TEASE_REMINDER_MINUTES: z.coerce.number().min(0).default(30),
 
   // After /stop, nothing that moves may start for this long — no buzz,
-  // pattern or tease, from anyone. /stop's `duration` overrides it per use.
-  // 0 means /stop halts everything but locks nothing out.
-  STOP_LOCKOUT_MINUTES: z.coerce.number().min(0).max(120).default(3),
+  // pattern or tease, from anyone. /stop's `duration` overrides it per use,
+  // and a later /stop replaces it, so `duration:0` lifts it early.
+  STOP_LOCKOUT_MINUTES: z.coerce.number().min(0).max(120).default(30),
 
   // Liveness. Requires "heartbeat" to be enabled in the Lovense developer
   // dashboard — without it, Lovense Remote only calls back once at pairing
@@ -75,21 +82,20 @@ const schema = z.object({
   WAKE_RETRY_ATTEMPTS: z.coerce.number().int().min(0).max(5).default(2),
   WAKE_RETRY_DELAY_MS: z.coerce.number().int().min(100).default(700),
 
-  // DM the toy's owner when their link drops. A channel message is easy to
-  // miss; a DM raises a push notification on the phone that needs the fix.
-  // iOS cannot be automated into restarting the Lovense app, so a human
-  // tapping the notification is the recovery path.
-  DM_ON_DISCONNECT: z
+  // When /test finds a toy not responding, DM its owner how to fix it. The
+  // bot sends no other DMs: iOS can't be automated into restarting the
+  // Lovense app, so the fix is a person, and a DM is a push notification
+  // that reaches them. Set to false to keep it to the /test reply.
+  DM_ON_FAILED_TEST: z
     .string()
     .optional()
     .transform((v) => v !== 'false' && v !== '0'),
-  // Minimum gap between disconnect DMs for the same person, so a flapping
-  // connection doesn't turn into a notification storm.
-  DM_COOLDOWN_SEC: z.coerce.number().min(0).default(600),
 
   TRIGGER_ON_BOT_MESSAGES: bool,
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-}).refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
+});
+
+const schema = fields.refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
   // One channel doing both jobs would put every bot notice in front of the
   // person the command channel exists to keep them from.
   message: 'must differ from MAIN_CHANNEL_ID',
@@ -151,4 +157,7 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+/** Every setting the bot reads. .env.test must pin each one; see config.test.ts. */
+export const CONFIG_KEYS = Object.keys(fields.shape);
 export type Config = typeof config;

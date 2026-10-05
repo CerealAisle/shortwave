@@ -1,51 +1,27 @@
-import type { AutocompleteInteraction, ChatInputCommandInteraction } from 'discord.js';
-import { resolveToys, toyChoices, toyLabel, type ToyResolution } from '../lovense/toys';
-import type { LovenseToy } from '../lovense/types';
-import type { ToyTease } from '../session/manager';
-import { store, type ToyLink } from '../store/store';
+import type { AutocompleteInteraction } from 'discord.js';
+import { toyChoices } from '../lovense/toys';
+import type { Session } from '../session/manager';
+import { resolveTarget } from '../session/target';
+import { text } from '../text';
+
+/** The value the "All connected toys" suggestion sends. */
+export const ALL_TOYS = 'all';
 
 /**
- * The optional `toy` argument shared by /tease, /buzz, /pattern and /off.
- * Its suggestions come from the toys of whoever the command targets, so a
- * new toy shows up as soon as its app reports it — no deploy-commands.
+ * Suggestions for /focus: "All connected toys" first, then each of the
+ * target's toys. New toys appear as soon as Lovense Remote reports them.
  */
-export const TOY_OPTION = 'toy';
-export const TOY_OPTION_DESCRIPTION = 'Which toy (defaults to all of them)';
-
-/**
- * Suggest the target's toys. `userOption` names the command's user option;
- * before one is picked, or for commands without one, it is the caller.
- */
-export async function respondWithToys(
-  interaction: AutocompleteInteraction,
-  userOption?: string,
-): Promise<void> {
-  const picked = userOption ? interaction.options.get(userOption)?.value : undefined;
-  const userId = typeof picked === 'string' ? picked : interaction.user.id;
-  const link = interaction.guildId ? store.getByUser(interaction.guildId, userId) : null;
-  await interaction.respond(link ? toyChoices(link.toys, interaction.options.getFocused()) : []);
-}
-
-/** The toys the command's `toy` option means for this link. */
-export function toysFromOption(
-  interaction: ChatInputCommandInteraction,
-  link: ToyLink,
-): ToyResolution {
-  return resolveToys(link.toys, interaction.options.getString(TOY_OPTION));
+export async function respondWithFocusChoices(interaction: AutocompleteInteraction): Promise<void> {
+  const typed = interaction.options.getFocused();
+  const target = interaction.guildId ? resolveTarget(interaction.guildId) : null;
+  const toys = target?.ok && target.link ? toyChoices(target.link.toys, typed) : [];
+  const showAll = !typed.trim() || text.focus.allChoice.toLowerCase().includes(typed.trim().toLowerCase());
+  await interaction.respond(
+    [...(showAll ? [{ name: text.focus.allChoice, value: ALL_TOYS }] : []), ...toys].slice(0, 25),
+  );
 }
 
 /** "50% / 1.5s · 12 buzz(es) · 2 missed" */
-export function describeTease(t: ToyTease): string {
-  const missed = t.missedCount > 0 ? ` · ${t.missedCount} missed` : '';
-  return `${t.intensityPercent}% / ${t.durationSec}s · ${t.triggerCount} buzz(es)${missed}`;
-}
-
-/** Bold, comma-separated names of teasing toys. */
-export function names(teases: ToyTease[]): string {
-  return teases.map((t) => `**${t.toyName}**`).join(', ');
-}
-
-/** The same, for toys straight from a link. */
-export function toyNames(toys: LovenseToy[]): string {
-  return toys.map((t) => `**${toyLabel(t)}**`).join(', ');
+export function describeTease(s: Session): string {
+  return text.teaseDetail(s.intensityPercent, s.durationSec, s.triggerCount, s.missedCount);
 }

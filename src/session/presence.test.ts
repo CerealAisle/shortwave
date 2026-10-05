@@ -209,8 +209,24 @@ describe('presence from command results', () => {
   });
 
   it('a network failure says nothing either way', () => {
-    presence.noteInconclusive('guild:user');
+    presence.noteFailed('guild:user', undefined);
     assert.equal(presence.statusFor(link()).presence, 'online');
+  });
+
+  it('a failed command after a success does not cost the link its reachability', () => {
+    // Heartbeats long gone, as on iOS: only the earlier 200 keeps it online.
+    presence.noteReachable('guild:user');
+    presence.noteFailed('guild:user', undefined);
+    const quiet = link({ lastSeen: Date.now() - TIMEOUT_MS - 60_000 });
+    assert.equal(presence.statusFor(quiet).presence, 'online');
+  });
+
+  it('a failed command is recorded without marking the link offline', () => {
+    // A 400 is about the command, not the app; the board shows it instead.
+    presence.noteFailed('guild:user', 400);
+    const status = presence.statusFor(link());
+    assert.equal(status.presence, 'online');
+    assert.equal(status.lastResult?.code, 400);
   });
 
   it('forget drops everything held for a link', () => {

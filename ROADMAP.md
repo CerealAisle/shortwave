@@ -14,7 +14,7 @@ that one disagree, this one is newer.
 the signal. The bot has no software gate for it, so there is no `/on`
 container — the command is removed rather than repurposed.
 
-**Anything that stops is never gated.** `/off` and `/stop` are usable by the
+**Anything that stops is never gated.** `/stop` is usable by the
 person wearing the toy, unconditionally, whoever started something and whoever
 is controlling it. The rule: *commands that increase stimulation may be
 restricted; commands that reduce or stop it never are.*
@@ -28,15 +28,26 @@ while tease is active — `TEASE_REMINDER_MINUTES`, default 30.
 **The wearer sees three commands: `/connect`, `/test`, `/stop`.** In
 practice one person controls and the other wears, so everything else is a
 controller command, hidden with Discord's default member permissions.
-`/stop` also holds everything still for a few minutes afterwards
-(`STOP_LOCKOUT_MINUTES`), and a later `/stop` can extend that but never
-shorten it. Supersedes the command surface table at the end of this file.
+`/stop` also holds everything still afterwards (`STOP_LOCKOUT_MINUTES`,
+default 30). A later `/stop` replaces the timer, so either person can shorten
+it — always by agreement, which is theirs to keep, not the bot's. `/off` is
+gone: `/tease off:True` turns tease off. Supersedes the command surface table
+at the end of this file.
 
-**One notice per outage.** A backgrounded iOS app produced a paused/resumed
-pair every minute. Only a command that gets through now ends an outage —
-heartbeats no longer do — and nothing more is posted until it does. The
-pinned board carries the detail: the code, what it means, and a
-"backgrounded" diagnosis.
+**Outages are shown, not posted.** A backgrounded iOS app produced a
+paused/resumed pair every minute. Only a command that gets through now ends
+an outage — heartbeats no longer do — and outages, pauses and errors are
+shown on the pinned board instead of posted: the code, what it means, and a
+"backgrounded" diagnosis. The bot still posts four things itself: a new
+connection, the tease reminder, tease turning off after a long outage, and
+`/stop` run elsewhere. All of the wording lives in `src/text.ts`.
+
+**She is always the target; `/focus` picks the toys.** `/connect` links her
+Lovense Remote app, so every toy connected to it is usable. Commands act on
+her (`TARGET_USER_ID`) with no user option, except `/disconnect`. `/focus`
+sets which toys they reach — all connected toys, or one — and tease reads it
+at each message, so on "all" a toy connected mid-session joins in. This
+replaces phase 6's per-command `toy` option and per-toy tease strengths.
 
 **`/stop` stays.** It was missing from the requirements draft. Halts every toy,
 clears every mode, usable by anyone, no confirmation prompt. It is the
@@ -51,8 +62,9 @@ safeword.
 
 Two rules follow, and they cover every case:
 
-- **Bot-initiated messages go to the command channel.** Disconnects, resumes,
-  tease reminders, errors. She never sees them in the shared channel.
+- **Bot-initiated messages go to the command channel.** New connections,
+  tease reminders, tease turning off, `/stop` notices, and the pinned board.
+  She never sees them in the shared channel.
 - **Command replies go wherever the command was issued.** So `/status` run in
   the main channel answers in the main channel. This is what makes `/stop` and
   `/disconnect` usable by her — she only has the main channel, and she must
@@ -61,9 +73,8 @@ Two rules follow, and they cover every case:
 Commands are therefore accepted in **both** channels. Only unsolicited
 messages are confined to the command channel.
 
-**DMs are unaffected.** The disconnect DM goes to whoever must act on it —
-usually the wearer — regardless of channel. That is the one bot message she
-should always receive.
+**One kind of DM.** When `/test` finds a toy not responding for a reason its
+owner can fix, they get a DM with the steps. Nothing else sends one.
 
 **Multi-toy work is deferred** until there is a second toy to test with.
 Shipping toy addressing never exercised against two real toys would be
@@ -260,14 +271,15 @@ of a person's toys tease at the same settings, a trigger is still one
 untargeted command — exactly what a one-toy setup sent before — and only
 diverging settings produce one command per toy.
 
-**Check with two real toys before relying on it:**
+**Check with two real toys before relying on it** (with `/focus`, which
+replaced the per-command `toy` option):
 
-1. Both toys appear on the status board and in the `toy` suggestions.
-2. `/buzz toy:<one>` moves only that toy.
-3. `/tease toy:<one> intensity:20`, then `/tease toy:<other> intensity:80`:
-   one message buzzes both, each at its own strength, and neither command
-   cuts the other short.
-4. `/off toy:<one>` stops only that toy; the other keeps teasing.
+1. Both toys appear on the status board and in the `/focus` suggestions.
+2. `/focus <one>`, then `/buzz`: only that toy moves.
+3. `/focus All connected toys`, `/tease`, and post: both toys buzz from one
+   message, and neither cuts the other short.
+4. With tease on and focus on all, connect the second toy only now: the next
+   message buzzes it too.
 5. Switch one toy off: the board marks it ⚫ disconnected while the other
    stays 🟢.
 6. `/stop` halts both.

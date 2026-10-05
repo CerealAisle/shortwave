@@ -69,6 +69,9 @@ them into `.env` in Part 7.
    - a channel only you can see, where the bot posts its own notices
      → save as `COMMAND_CHANNEL_ID`
 
+4. Right-click **her** name → **Copy User ID**. Commands act on her.
+   → save as `TARGET_USER_ID`
+
 ---
 
 ## Part 3 — Configure the Lovense dashboard
@@ -610,17 +613,17 @@ aggressive about suspending background apps than anything on the server side.
    iOS pins it in the foreground, which is the most reliable state there is.
    Overkill for a short session, worth it for hours.
 
-9. **Let the bot's DMs through.** When the toy drops, the bot sends her a
-   direct message telling her to force-quit and reopen Lovense Remote — that
-   is the recovery path, and iOS offers no way to automate it. For the
+9. **Let the bot's DMs through.** When `/test` finds her toy not responding,
+   the bot DMs her the steps to fix it — usually force-quit and reopen
+   Lovense Remote, which iOS offers no way to automate. For the
    notification to actually arrive: Discord must be allowed to notify (iOS
    Settings → Notifications → Discord), the DM conversation must not be muted,
    and Discord should be in the allow list of any Focus mode she uses. In
    Discord, opening the bot's DM and setting notifications to **All Messages**
    is worth doing once.
 
-   Set `DM_ON_DISCONNECT=false` in `.env` if you would rather have only the
-   channel message.
+   Set `DM_ON_FAILED_TEST=false` in `.env` if you would rather keep it to
+   the `/test` reply.
 
 **Reliability, most to least:** app in the foreground with the screen locked →
 app backgrounded while using light apps → app backgrounded while playing a
@@ -655,12 +658,12 @@ In your Discord server, in the main channel:
 
 6. She runs `/test`. It should say her toy is responding, and nothing moves.
 
-7. **You** run `/tease user:@her`. You post in the main channel. She should
+7. **You** run `/tease`. You post in the main channel. She should
    feel a buzz within a second or so.
 
 8. Test the safeword: with tease on, **she** runs `/stop`. Everything halts,
-   and the command channel tells you she did. Then try `/buzz` — it should
-   refuse until the lockout runs out (3 minutes by default).
+   and the command channel tells you she did. Then try `/buzz` —
+   it should refuse. `/stop duration:0` lifts the lockout once you've agreed to.
 
 ---
 
@@ -673,7 +676,7 @@ sudo -u lovensebot sed -i 's/^LOG_LEVEL=.*/LOG_LEVEL=debug/' /opt/lovense-bot/.e
 sudo systemctl restart lovense-bot
 ```
 
-You turn tease on for her with `/tease user:@her`, and she uses her phone completely
+You turn tease on for her with `/tease`, and she uses her phone completely
 normally for a few hours. Meanwhile:
 
 ```bash

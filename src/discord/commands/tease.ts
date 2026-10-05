@@ -1,148 +1,114 @@
-import { MessageFlags, SlashCommandBuilder, channelMention } from 'discord.js';
+import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { config } from '../../config';
+import * as actions from '../../lovense/actions';
 import { makeUid } from '../../lovense/client';
+import { focusLabel, focusTargets, getFocus } from '../../session/focus';
 import { sessions } from '../../session/manager';
 import { presence } from '../../session/presence';
-import { toyLabel } from '../../lovense/toys';
-import { store } from '../../store/store';
-import {
-  TOY_OPTION,
-  TOY_OPTION_DESCRIPTION,
-  names,
-  respondWithToys,
-  toysFromOption,
-} from '../toy-option';
+import { text } from '../../text';
 import { refuseIfStopped } from '../lockout';
+import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
 /**
- * Tease mode: every message from someone other than the toy's owner, in the
- * main channel, sends a short buzz. Persistent until `/off` or `/stop`.
+ * Tease mode: every message from someone other than her, in the main
+ * channel, buzzes her focused toys — decided at each message, so with focus
+ * on all, any toy connected at that moment. Persistent until turned off or
+ * /stop. Running it again while on changes the strength or length in place.
  *
- * Either person may start it on either toy — consent is the toy being on and
- * worn, not a command. That is also why /off and /stop are never gated: what
- * this starts, the wearer can always end.
- *
- * Without `toy` it covers every connected toy; with it, just that one, so
- * two toys can tease at different strengths. Running it again for a toy
- * already teasing retunes the strength and length in place rather than
- * starting over.
+ * `off:True` turns it off instead. That path is never refused by a /stop
+ * lockout (it only ever stops things), and it always sends a Stop, so it
+ * also ends a buzz or pattern in progress.
  */
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
     .setName('tease')
     // Controller only: hidden from, and refused to, anyone but admins.
     .setDefaultMemberPermissions(0)
-    .setDescription('Tease mode: messages from anyone else in the main channel buzz the toy')
-    .addUserOption((o) => o.setName('user').setDescription('Whose toy (defaults to yours)'))
-    .addStringOption((o) =>
-      o.setName(TOY_OPTION).setDescription(TOY_OPTION_DESCRIPTION).setAutocomplete(true),
-    )
+    .setDescription(text.tease.describe)
     .addIntegerOption((o) =>
       o
         .setName('intensity')
-        .setDescription(`Buzz strength %, default ${config.BUZZ_INTENSITY_PERCENT}`)
+        .setDescription(text.tease.describeIntensity(config.BUZZ_INTENSITY_PERCENT))
         .setMinValue(1)
         .setMaxValue(100),
     )
     .addNumberOption((o) =>
       o
         .setName('duration')
-        .setDescription(`Buzz length in seconds, default ${config.BUZZ_DURATION_SEC}`)
+        .setDescription(text.tease.describeDuration(config.BUZZ_DURATION_SEC))
         .setMinValue(1)
         .setMaxValue(30),
-    ),
-
-  async autocomplete(interaction) {
-    await respondWithToys(interaction, 'user');
-  },
+    )
+    .addBooleanOption((o) => o.setName('off').setDescription(text.tease.describeOff)),
 
   async execute(interaction) {
     if (!interaction.guildId) return;
+    const guildId = interaction.guildId;
+
+    const target = await requireTarget(interaction);
+    if (!target) return;
+    const uid = makeUid(guildId, target.userId);
+
+    // --- off ---
+    if (interaction.options.getBoolean('off')) {
+      // disarm() sends a Stop to every toy.
+      const session = sessions.disarm(guildId, target.userId);
+      if (!session) {
+        // Nothing was teasing, but a /buzz or /pattern may be. Stop it anyway.
+        void sessions.sendNow(uid, actions.stop(), 'tease-off').catch(() => {});
+        await interaction.reply(text.tease.wasNotOn(target.name));
+        return;
+      }
+      const minutes = Math.max(1, Math.round((Date.now() - session.armedAt) / 60_000));
+      await interaction.reply(
+        text.tease.turnedOff(target.name, session.triggerCount, session.missedCount, minutes),
+      );
+      return;
+    }
+
+    // --- on ---
     if (await refuseIfStopped(interaction)) return;
 
-    const target = interaction.options.getUser('user') ?? interaction.user;
-    const self = target.id === interaction.user.id;
-    const whose = self ? 'Your' : `${target.displayName}'s`;
-
-    const link = store.getByUser(interaction.guildId, target.id);
-    if (!link) {
+    if (target.link.lastSeen === null) {
       await interaction.reply({
-        content: self
-          ? 'You have not linked a toy yet. Run `/connect` first.'
-          : `${target.displayName} has no toy linked in this server.`,
+        content: text.common.notScanned(target.self, target.name),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    if (link.lastSeen === null) {
-      await interaction.reply({
-        content:
-          `${whose} QR code has not been scanned yet — the bot has not heard from the Lovense app. ` +
-          'Scan the code from `/connect`, then try again.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const status = presence.statusFor(link);
-
+    const status = presence.statusFor(target.link);
     if (status.presence === 'offline') {
       await interaction.reply({
-        content:
-          `${whose} toy is unreachable, so tease would do nothing.\n` +
-          'Check that Lovense Remote is running, the phone has data, and the toy is connected over Bluetooth.',
+        content: text.tease.unreachable(target.name),
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
-    const toys = toysFromOption(interaction, link);
-    if (!toys.ok) {
-      await interaction.reply({
-        content: `Cannot start tease: ${toys.error}.`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    const intensity = interaction.options.getInteger('intensity') ?? undefined;
-    const duration = interaction.options.getNumber('duration') ?? undefined;
-
-    const { added, updated } = sessions.arm({
-      uid: makeUid(interaction.guildId, target.id),
-      guildId: interaction.guildId,
-      ownerId: target.id,
-      toys: toys.toys.map((t) => ({ id: t.id, name: toyLabel(t) })),
+    const { session, created } = sessions.arm({
+      uid,
+      guildId,
+      ownerId: target.userId,
       startedBy: interaction.user.id,
-      intensityPercent: intensity,
-      durationSec: duration,
+      intensityPercent: interaction.options.getInteger('intensity') ?? undefined,
+      durationSec: interaction.options.getNumber('duration') ?? undefined,
     });
 
-    const heartbeatWarning =
+    const focus = getFocus(guildId, target.userId);
+    const label = focusLabel(focus, target.link);
+    const reachable = focusTargets(target.link, focus);
+
+    const reply = created
+      ? text.tease.started(target.name, session.intensityPercent, session.durationSec, label, config.MAIN_CHANNEL_ID)
+      : text.tease.retuned(target.name, session.intensityPercent, session.durationSec, label);
+    const problem = reachable.ok ? '' : text.tease.focusProblem(reachable.error);
+    const notConfirmed =
       presence.enabled && !status.heartbeatsWorking && !status.lastResult?.ok
-        ? '\n\n*Not confirmed reachable yet — the first probe or buzz will tell.*'
+        ? text.tease.notConfirmed
         : '';
 
-    const reminder =
-      config.TEASE_REMINDER_MINUTES > 0
-        ? ` No auto-off; a reminder posts every ${config.TEASE_REMINDER_MINUTES} minutes.`
-        : ' No auto-off.';
-
-    const whoseToys = self ? 'your' : `${target.displayName}'s`;
-    const changes = [
-      ...added.map((t) => `**Tease on**: ${t.toyName} at ${t.intensityPercent}% for ${t.durationSec}s`),
-      ...updated.map((t) => `**Tease updated**: ${t.toyName} now ${t.intensityPercent}% for ${t.durationSec}s`),
-    ];
-
-    await interaction.reply({
-      content:
-        `${changes.join('\n')}\n` +
-        `Messages from anyone else in ${channelMention(config.MAIN_CHANNEL_ID)} buzz ${whoseToys} ` +
-        `${names([...added, ...updated])}.\n` +
-        `\`/off\` turns it off, \`/stop\` halts everything.${reminder}` +
-        heartbeatWarning,
-    });
+    await interaction.reply(reply + problem + notConfirmed);
   },
 };
