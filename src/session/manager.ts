@@ -500,7 +500,7 @@ export class SessionManager {
     }
 
     // Reported only once every attempt has failed. Reporting the first 507
-    // would suspend the session and send a DM, only for the retry to land a
+    // would suspend the session, only for the retry to land a
     // second later and resume it.
     if (lastError instanceof LovenseError && lastError.code === 507) {
       presence.markReportedOffline(uid);

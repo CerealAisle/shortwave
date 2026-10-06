@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { dmKindFor } from './discord/commands/test';
+import { fixStepsFor } from './discord/commands/test';
 import { loadCommands } from './discord/registry';
 import { text } from './text';
 
@@ -35,32 +35,34 @@ describe('command text', () => {
   });
 });
 
-describe('fix-it DMs', () => {
-  it('every DM is written', () => {
-    for (const [kind, body] of Object.entries(text.dm)) {
-      assert.ok(body.trim().length > 20, `text.dm.${kind} looks empty`);
+describe('fix-it steps', () => {
+  it('every set of steps is written, and @s the person it is for', () => {
+    for (const [kind, steps] of Object.entries(text.fixSteps)) {
+      const body = steps('123');
+      assert.ok(body.length > 40, `text.fixSteps.${kind} looks empty`);
+      assert.ok(body.startsWith('<@123>'), `text.fixSteps.${kind} should start with the @mention`);
     }
   });
 
   it('a backgrounded app gets the force-quit steps', () => {
-    assert.equal(dmKindFor({ ok: false, code: 507, message: '' }, true), 'backgrounded');
-    assert.match(text.dm.backgrounded, /Force-quit/);
+    assert.equal(fixStepsFor({ ok: false, code: 507, message: '' }, true), 'backgrounded');
+    assert.match(text.fixSteps.backgrounded('1'), /Force-quit/);
   });
 
   it('a closed app, a lost link and a network failure each get their own steps', () => {
-    assert.equal(dmKindFor({ ok: false, code: 507, message: '' }, false), 'appClosed');
-    assert.equal(dmKindFor({ ok: false, code: 503, message: '' }, false), 'unlinked');
-    assert.equal(dmKindFor({ ok: false, code: undefined, message: '' }, false), 'network');
+    assert.equal(fixStepsFor({ ok: false, code: 507, message: '' }, false), 'appClosed');
+    assert.equal(fixStepsFor({ ok: false, code: 503, message: '' }, false), 'unlinked');
+    assert.equal(fixStepsFor({ ok: false, code: undefined, message: '' }, false), 'network');
   });
 
   it('sends nothing for problems only the controller can fix', () => {
     // A bad developer token or a bot bug: nothing for the wearer to do.
     for (const code of [400, 404, 501, 502]) {
-      assert.equal(dmKindFor({ ok: false, code, message: '' }, false), null, `${code}`);
+      assert.equal(fixStepsFor({ ok: false, code, message: '' }, false), null, `${code}`);
     }
   });
 
   it('sends nothing when the test passed', () => {
-    assert.equal(dmKindFor({ ok: true }, true), null);
+    assert.equal(fixStepsFor({ ok: true }, true), null);
   });
 });

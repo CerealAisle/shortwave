@@ -73,8 +73,8 @@ Two rules follow, and they cover every case:
 Commands are therefore accepted in **both** channels. Only unsolicited
 messages are confined to the command channel.
 
-**One kind of DM.** When `/test` finds a toy not responding for a reason its
-owner can fix, they get a DM with the steps. Nothing else sends one.
+**No DMs.** When `/test` finds a toy not responding for a reason she can
+fix, the steps are posted in the shared channel with an @mention.
 
 **Multi-toy work is deferred** until there is a second toy to test with.
 Shipping toy addressing never exercised against two real toys would be

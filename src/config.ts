@@ -82,14 +82,22 @@ const fields = z.object({
   WAKE_RETRY_ATTEMPTS: z.coerce.number().int().min(0).max(5).default(2),
   WAKE_RETRY_DELAY_MS: z.coerce.number().int().min(100).default(700),
 
-  // When /test finds a toy not responding, DM its owner how to fix it. The
-  // bot sends no other DMs: iOS can't be automated into restarting the
-  // Lovense app, so the fix is a person, and a DM is a push notification
-  // that reaches them. Set to false to keep it to the /test reply.
-  DM_ON_FAILED_TEST: z
+  // The timezone /alarm reads times in, unless the time names its own
+  // ("9pm PT", "9pm America/New_York"). An IANA name.
+  TIMEZONE: z
     .string()
-    .optional()
-    .transform((v) => v !== 'false' && v !== '0'),
+    .default('America/Denver')
+    .refine(
+      (zone) => {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: zone });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { message: 'must be an IANA timezone name, e.g. America/Denver' },
+    ),
 
   TRIGGER_ON_BOT_MESSAGES: bool,
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

@@ -613,17 +613,13 @@ aggressive about suspending background apps than anything on the server side.
    iOS pins it in the foreground, which is the most reliable state there is.
    Overkill for a short session, worth it for hours.
 
-9. **Let the bot's DMs through.** When `/test` finds her toy not responding,
-   the bot DMs her the steps to fix it — usually force-quit and reopen
-   Lovense Remote, which iOS offers no way to automate. For the
-   notification to actually arrive: Discord must be allowed to notify (iOS
-   Settings → Notifications → Discord), the DM conversation must not be muted,
-   and Discord should be in the allow list of any Focus mode she uses. In
-   Discord, opening the bot's DM and setting notifications to **All Messages**
-   is worth doing once.
-
-   Set `DM_ON_FAILED_TEST=false` in `.env` if you would rather keep it to
-   the `/test` reply.
+9. **Let @mentions through.** When `/test` finds her toy not responding,
+   the bot posts the steps to fix it in the main channel and @mentions her —
+   usually force-quit and reopen Lovense Remote, which iOS offers no way to
+   automate. For the notification to actually arrive: Discord must be allowed
+   to notify (iOS Settings → Notifications → Discord), the main channel must
+   not be muted for mentions, and Discord should be in the allow list of any
+   Focus mode she uses.
 
 **Reliability, most to least:** app in the foreground with the screen locked →
 app backgrounded while using light apps → app backgrounded while playing a

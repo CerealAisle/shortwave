@@ -4,19 +4,19 @@ import { explainCode, makeUid } from '../../lovense/client';
 import { isToyConnected, toyLabel } from '../../lovense/toys';
 import { sessions, type TestResult } from '../../session/manager';
 import { diagnose, presence } from '../../session/presence';
-import { text, type DmKind } from '../../text';
-import { dm } from '../dm';
+import { text, type FixStepsKind } from '../../text';
+import { post } from '../notify';
 import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
 /**
- * Which fix-it DM a failed test calls for, or null when there is nothing the
- * toy's owner can do (a bad developer token, a bot bug).
+ * Which fix-it steps a failed test calls for, or null when there is nothing
+ * she can do (a bad developer token, a bot bug).
  */
-export function dmKindFor(
+export function fixStepsFor(
   result: TestResult,
   backgrounded: boolean,
-): Exclude<DmKind, 'bluetooth'> | null {
+): Exclude<FixStepsKind, 'bluetooth'> | null {
   if (result.ok) return null;
   switch (result.code) {
     case 507:
@@ -38,8 +38,8 @@ export function dmKindFor(
  * Zero strength, so it is allowed during a /stop lockout and can never
  * surprise anyone. A success also counts as the command that ends an outage.
  *
- * When it fails for a reason the toy's owner can fix, they get a DM with the
- * steps. That is the only DM the bot sends.
+ * When it fails for a reason she can fix, the steps are posted in the shared
+ * channel with an @mention. The bot sends no DMs.
  */
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -94,19 +94,30 @@ export const command: BotCommand = {
     const why = diagnose(presence.statusFor(link));
     if (why?.hint) lines.push(text.test.hint(why.hint));
 
-    // A DM to whoever has to fix it, with the steps for this failure.
-    const kind: DmKind | null = bluetoothOnly
+    const report = [text.test.heading(self, target.name), ...lines, text.test.footer(lastSeen)];
+
+    // The steps for this failure go to the shared channel, @-ing her: in this
+    // reply if /test was run there, otherwise as a post of their own.
+    const kind: FixStepsKind | null = bluetoothOnly
       ? 'bluetooth'
       : firstFailure
-        ? dmKindFor(firstFailure, why?.backgrounded ?? false)
+        ? fixStepsFor(firstFailure, why?.backgrounded ?? false)
         : null;
-    if (kind && config.DM_ON_FAILED_TEST) {
-      const delivered = await dm(interaction.client, target.userId, text.dm[kind]);
-      lines.push(delivered ? text.test.dmSent(target.userId) : text.test.dmFailed(target.userId));
+    const steps = kind ? text.fixSteps[kind](target.userId) : null;
+    const mainId = config.MAIN_CHANNEL_ID;
+
+    if (steps && interaction.channelId === mainId) {
+      await interaction.editReply({
+        content: `${report.join('\n')}\n\n${steps}`,
+        allowedMentions: { users: [target.userId] },
+      });
+      return;
     }
 
-    await interaction.editReply(
-      [text.test.heading(self, target.name), ...lines, text.test.footer(lastSeen)].join('\n'),
-    );
+    if (steps) {
+      const posted = await post(interaction.client, mainId, steps, { mention: [target.userId] });
+      report.push(posted ? text.test.fixStepsPosted(target.userId, mainId) : text.test.fixStepsFailed(mainId));
+    }
+    await interaction.editReply({ content: report.join('\n'), allowedMentions: { parse: [] } });
   },
 };

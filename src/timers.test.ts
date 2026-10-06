@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { store } from './store/store';
-import { MAX_TIMER_MS, Timers, parseDuration } from './timers';
+import { MAX_ALARM_MS, MAX_TIMER_MS, Timers, parseDuration } from './timers';
 
 describe('parseDuration', () => {
   it('reads the forms people type', () => {
@@ -34,6 +34,7 @@ describe('Timers', () => {
   afterEach(() => {
     t?.stop();
     for (const { key } of store.listSettings(`timer:${GUILD}:`)) store.deleteSetting(key);
+    for (const { key } of store.listSettings(`alarm:${GUILD}:`)) store.deleteSetting(key);
   });
 
   it('saves a timer so a restart keeps it', () => {
@@ -64,5 +65,27 @@ describe('Timers', () => {
     t = new Timers();
     assert.equal(t.set(params, 1_000).ok, false);
     assert.equal(t.set(params, MAX_TIMER_MS + 1).ok, false);
+  });
+
+  it('an alarm is saved for the exact instant asked', () => {
+    t = new Timers();
+    const r = t.setAlarm(params, 5_000_000, 1_000);
+    assert.ok(r.ok);
+    assert.equal(r.timer.kind, 'alarm');
+    assert.equal(r.timer.dueAt, 5_000_000);
+  });
+
+  it('timers and alarms keep separate names', () => {
+    t = new Timers();
+    t.set(params, 600_000);
+    t.setAlarm(params, Date.now() + 600_000);
+    assert.equal(t.cancel(GUILD, 'Break', 'alarm'), true);
+    assert.equal(t.cancel(GUILD, 'Break', 'timer'), true);
+  });
+
+  it('refuses an alarm in the past or more than a year out', () => {
+    t = new Timers();
+    assert.equal(t.setAlarm(params, 500, 1_000).ok, false);
+    assert.equal(t.setAlarm(params, MAX_ALARM_MS + 2_000, 1_000).ok, false);
   });
 });
