@@ -120,9 +120,8 @@ src/
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── status-board.ts         pinned live-status post in the command channel
-    ├── notify.ts               posts to the command channel
+    ├── notify.ts               posts to a channel; notices to the command channel
     ├── failure.ts              a failed send, as a reply
-    ├── dm.ts                   the one DM: fix-it steps after a failed /test
     ├── toy-option.ts           the shared `toy` option and its autocomplete
     ├── events/message-create.ts  the trigger path
     └── commands/               one file per slash command
@@ -231,11 +230,11 @@ before you change anything:
   refusing commands. The bot posts only four things to the command channel
   on its own: a new connection, the tease reminder, tease turning itself off
   after a long outage, and someone running `/stop` elsewhere.
-- **One kind of DM.** When `/test` finds a toy not responding for a reason
-  its owner can fix, they get a DM with the steps for that failure —
-  force-quit a backgrounded app, open a closed one, reconnect Bluetooth,
-  re-pair a lost link. Nothing else sends a DM. `DM_ON_FAILED_TEST=false`
-  turns it off.
+- **No DMs.** When `/test` finds a toy not responding for a reason she can
+  fix, the steps for that failure — force-quit a backgrounded app, open a
+  closed one, reconnect Bluetooth, re-pair a lost link — are posted in the
+  main channel with an @mention, so the push notification still reaches her.
+  If `/test` was run in the main channel they're part of its reply.
 - **`/tease` refuses an unreachable toy** rather than starting into the void.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
@@ -335,7 +334,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `OFFLINE_GRACE_SEC` | `300` | Pause-before-disarm window; `0` disarms on first blip |
 | `WAKE_RETRY_ATTEMPTS` | `2` | Retries for a 507 from a sleeping iOS app |
 | `WAKE_RETRY_DELAY_MS` | `700` | Base retry delay (grows per attempt) |
-| `DM_ON_FAILED_TEST` | `true` | When `/test` fails, DM the toy's owner the steps to fix it. The only DM the bot sends |
+| `TIMEZONE` | `America/Denver` | The zone `/alarm` reads times in, unless a time names its own (`9pm ET`). An IANA name |
 | `TRIGGER_ON_BOT_MESSAGES` | `false` | Whether other bots/webhooks count |
 | `LOG_LEVEL` | `info` | `debug` to trace every trigger decision |
 
@@ -358,7 +357,7 @@ checks that descriptions still fit Discord's limits.
 | Command | What it does |
 |---|---|
 | `/connect` | Ephemeral QR code to link your Lovense Remote app. Every toy connected to the app becomes usable |
-| `/test` | Sends a 0% command to each of her connected toys — nothing moves — and posts which are responding, with what any error means. If one isn't, DMs her how to fix it. Always tests her, whoever runs it |
+| `/test` | Sends a 0% command to each of her connected toys — nothing moves — and posts which are responding, with what any error means. If one isn't, posts the fix steps in the main channel, @-ing her. Always tests her, whoever runs it |
 | `/stop [duration]` | Safeword: halts every toy, turns tease off, and keeps everything stopped for `duration` minutes (default `STOP_LOCKOUT_MINUTES`, 30). A later `/stop` replaces the timer; `duration:0` lifts it. Never gated. Tells the command channel when run elsewhere |
 
 **The controller** (anyone with Administrator, which includes the server
@@ -371,6 +370,7 @@ owner) also sees:
 | `/buzz <intensity> <seconds>` | One-off vibration on her focused toys |
 | `/pattern <name> [minutes]` | Play a named pattern from `patterns/` on her focused toys. The name autocompletes. `minutes` loops it for that long (max 60) |
 | `/status` | Deletes the status board and reposts it, pinned, in this channel; the bot keeps that copy updated from then on |
+| `/alarm <name> <time>` | Posts here, pinging you, at a clock time: `9pm`, `tomorrow 7:30am`, `fri 9pm`, `10/31 8pm`, optionally with a zone (`ET`, `PT`, `America/New_York`). Read in `TIMEZONE` otherwise; the reply shows the time in each viewer's own zone. Same name moves it; `time:off` cancels. Survives restarts |
 | `/timer <name> <duration>` | Posts here, pinging you, when it runs out. `10m`, `1h30m`, `45s` or minutes; up to 7 days. Same name replaces it; `duration:0` cancels. Survives restarts |
 | `/disconnect <target>` | Delete someone's link from the bot. She disconnects from Lovense Remote instead |
 
@@ -573,11 +573,10 @@ spending time on it:
   phone anyone is carrying.
 
 So the recovery path is a human, and the bot's job is to reach them quickly.
-Running `/test` does that: when it fails, the toy's owner gets a DM with the
-fix for that failure, and a DM raises a push notification even when the
-channel is muted. Set the DM
-conversation to allow notifications, and on iOS add Discord to any Focus mode
-that might be active.
+Running `/test` does that: when it fails, the fix for that failure is posted
+in the main channel with an @mention, which raises a push notification. Make
+sure she hasn't muted mentions in that channel, and on iOS add Discord to any
+Focus mode that might be active.
 
 **Buzzes feel sparse during fast conversation.** That's `MIN_COMMAND_INTERVAL_MS`
 dropping triggers by design. Lower it if you want, but overlapping commands with

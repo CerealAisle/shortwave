@@ -191,14 +191,15 @@ export const text = {
     disconnected: (toy: string) => `⚫ ${toy} — not connected to the app (Bluetooth)`,
     /** Added when there is a specific fix. */
     hint: (hint: string) => `⚠️ ${cap(hint)}.`,
-    /** Added when she was sent fix-it steps. */
-    dmSent: (owner: string) => `📩 Sent ${userMention(owner)} the steps to fix it.`,
-    /** Added when that DM could not be delivered. */
-    dmFailed: (owner: string) =>
-      `Couldn't DM ${userMention(owner)} the steps — their DMs may be closed.`,
+    /** Added when the fix steps were posted in the main channel, @-ing her. */
+    fixStepsPosted: (owner: string, channel: string) =>
+      `📣 Posted the steps to fix it for ${userMention(owner)} in ${channelMention(channel)}.`,
+    /** Added when they couldn't be posted there. */
+    fixStepsFailed: (channel: string) =>
+      `Couldn't post the steps to fix it in ${channelMention(channel)} — check my permissions there.`,
     /** Last line, small. */
     footer: (lastCheckIn: number) =>
-      `-# The test sends a 0% vibrate command. Lovense Remote last checked in ${rel(lastCheckIn)}.`,
+      `-# The test sent a 0% vibrate command. Lovense Remote last check-in: ${rel(lastCheckIn)}.`,
   },
 
   // ===========================================================================
@@ -343,6 +344,37 @@ export const text = {
   },
 
   // ===========================================================================
+  // /alarm — controller
+  // ===========================================================================
+  alarm: {
+    describe: 'Set a named alarm for a clock time; I post here when it goes off',
+    describeName: 'What the alarm is for',
+    /** Cut to 100 characters, Discord's limit, if TIMEZONE is long. */
+    describeTime: (zone: string) =>
+      `e.g. 9pm, tomorrow 7am, fri 9:30pm, 10/31 8pm ET (default ${zone}). off cancels`.slice(0, 100),
+
+    /** Discord shows the time in each viewer's own timezone, so a misread is obvious. */
+    set: (name: string, at: number) =>
+      `⏰ Alarm **${name}** set for ${time(Math.floor(at / 1000), 'F')} (${rel(at)}).`,
+    /** An alarm with the same name was already set. */
+    replaced: (name: string, at: number) =>
+      `⏰ Alarm **${name}** moved to ${time(Math.floor(at / 1000), 'F')} (${rel(at)}).`,
+    cancelled: (name: string) => `⏰ Alarm **${name}** cancelled.`,
+    notFound: (name: string) => `There's no alarm called **${name}**.`,
+    badTime: (typed: string, reason: string) =>
+      `Couldn't read "${typed}" as a time (${reason}). Try \`9pm\`, \`tomorrow 7:30am\`, \`fri 9pm\` or \`10/31 8pm ET\`.`,
+    inThePast: 'That time has already passed.',
+    tooFar: 'Alarms can be at most a year ahead.',
+
+    /** Posted in the channel it was set in, pinging whoever set it. */
+    ringing: (name: string, userId: string, at: number) =>
+      `⏰ ${userMention(userId)} — alarm **${name}** (${time(Math.floor(at / 1000), 't')}).`,
+    /** The same, when it went off while the bot was offline. */
+    ringingLate: (name: string, userId: string, at: number) =>
+      `⏰ ${userMention(userId)} — alarm **${name}** was due at ${time(Math.floor(at / 1000), 't')}; this is late — the bot was restarting.`,
+  },
+
+  // ===========================================================================
   // A tease summary — used by /status, the board and the reminder
   // ===========================================================================
   /** "50% / 1.5s · 12 buzz(es) · 2 missed" */
@@ -419,12 +451,14 @@ export const text = {
   },
 
   // ===========================================================================
-  // Direct messages. Sent only when /test finds a toy not responding, to her,
-  // with the steps for that particular failure.
+  // Fix-it steps. When /test finds a toy not responding for a reason she can
+  // fix, these are posted in the main channel and @ her (or added to the
+  // /test reply, if it was run there). Each starts with the @mention.
   // ===========================================================================
-  dm: {
+  fixSteps: {
     /** The app is open but iOS has suspended its connection. */
-    backgrounded:
+    backgrounded: (user: string) =>
+      `${userMention(user)} ` +
       "**Your toy isn't responding** — Lovense Remote looks like it's been put in the background.\n\n" +
       'To fix it:\n' +
       '1. **Force-quit** Lovense Remote: swipe up from the bottom, then swipe the app away. ' +
@@ -432,28 +466,32 @@ export const text = {
       '2. Open it again and wait for the toy to reconnect.\n' +
       '3. Run `/test` to confirm.',
     /** No contact from the app at all. */
-    appClosed:
+    appClosed: (user: string) =>
+      `${userMention(user)} ` +
       "**Your toy isn't responding** — Lovense Remote seems to be closed, or your phone is offline.\n\n" +
       'To fix it:\n' +
       '1. Open Lovense Remote and check your toy is connected.\n' +
       '2. Make sure your phone has a data or Wi-Fi connection.\n' +
       '3. Run `/test` to confirm.',
     /** The app answers but no toy is attached over Bluetooth. */
-    bluetooth:
+    bluetooth: (user: string) =>
+      `${userMention(user)} ` +
       "**Your toy isn't connected** — Lovense Remote is running, but no toy is connected to it.\n\n" +
       'To fix it:\n' +
       '1. Make sure the toy is switched on and charged.\n' +
       '2. In Lovense Remote, connect the toy (it should show as connected).\n' +
       '3. Run `/test` to confirm.',
     /** Lovense no longer recognises the link. */
-    unlinked:
+    unlinked: (user: string) =>
+      `${userMention(user)} ` +
       "**Your Lovense Remote isn't linked any more** — Lovense doesn't recognise the connection.\n\n" +
       'To fix it: run `/connect` and scan the new QR code in Lovense Remote.',
     /** Lovense's servers couldn't be reached — not something she can fix. */
-    network:
+    network: (user: string) =>
+      `${userMention(user)} ` +
       "**Your toy couldn't be reached** — the Lovense servers didn't answer. " +
       "This usually isn't anything on your side. Try `/test` again in a few minutes.",
   },
 };
 
-export type DmKind = keyof typeof text.dm;
+export type FixStepsKind = keyof typeof text.fixSteps;

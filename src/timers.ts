@@ -4,11 +4,16 @@ import { store } from './store/store';
 import { text } from './text';
 
 /**
- * Named reminders for /timer. Each posts in the channel it was set in when
- * it runs out. Saved, so a restart doesn't lose them: one that fell due
- * while the bot was down fires as soon as it is back, marked late.
+ * Named reminders: /timer (a duration from now) and /alarm (a clock time).
+ * Each posts in the channel it was set in when it goes off. Saved, so a
+ * restart doesn't lose them: one that fell due while the bot was down fires
+ * as soon as it is back, marked late. Timers and alarms have separate names.
  */
+export type TimerKind = 'timer' | 'alarm';
+
 export interface Timer {
+  /** Absent on timers saved before alarms existed: those are timers. */
+  kind?: TimerKind;
   name: string;
   guildId: string;
   channelId: string;
@@ -19,6 +24,9 @@ export interface Timer {
 }
 
 export const MAX_TIMER_MS = 7 * 24 * 3_600_000;
+export const MAX_ALARM_MS = 366 * 24 * 3_600_000;
+/** setTimeout's ceiling (~24.8 days). Longer waits are taken in steps. */
+const MAX_WAIT_MS = 2 ** 31 - 1;
 const MIN_TIMER_MS = 5_000;
 /** A timer firing this long after it was due says it is late. */
 const LATE_MS = 60_000;
@@ -70,8 +78,8 @@ export type SetResult =
   | { ok: true; timer: Timer; replaced: boolean }
   | { ok: false; error: string };
 
-function key(guildId: string, name: string): string {
-  return `timer:${guildId}:${name.toLowerCase()}`;
+function key(kind: TimerKind, guildId: string, name: string): string {
+  return `${kind}:${guildId}:${name.toLowerCase()}`;
 }
 
 export class Timers {
@@ -81,7 +89,7 @@ export class Timers {
   /** Re-arm every saved timer. Call once Discord is ready. */
   start(client: Client): void {
     this.client = client;
-    for (const { key: k, value } of store.listSettings('timer:')) {
+    for (const { key: k, value } of [...store.listSettings('timer:'), ...store.listSettings('alarm:')]) {
       try {
         this.schedule(k, JSON.parse(value) as Timer);
       } catch {
@@ -95,21 +103,32 @@ export class Timers {
     this.handles.clear();
   }
 
-  set(params: Omit<Timer, 'setAt' | 'dueAt'>, ms: number, now = Date.now()): SetResult {
+  /** A timer: goes off `ms` from now. */
+  set(params: Omit<Timer, 'kind' | 'setAt' | 'dueAt'>, ms: number, now = Date.now()): SetResult {
     if (ms < MIN_TIMER_MS) return { ok: false, error: text.timer.tooShort };
     if (ms > MAX_TIMER_MS) return { ok: false, error: text.timer.tooLong };
+    return this.add('timer', params, now + ms, now);
+  }
 
-    const k = key(params.guildId, params.name);
+  /** An alarm: goes off at the instant `dueAt`. */
+  setAlarm(params: Omit<Timer, 'kind' | 'setAt' | 'dueAt'>, dueAt: number, now = Date.now()): SetResult {
+    if (dueAt <= now) return { ok: false, error: text.alarm.inThePast };
+    if (dueAt - now > MAX_ALARM_MS) return { ok: false, error: text.alarm.tooFar };
+    return this.add('alarm', params, dueAt, now);
+  }
+
+  private add(kind: TimerKind, params: Omit<Timer, 'kind' | 'setAt' | 'dueAt'>, dueAt: number, now: number): SetResult {
+    const k = key(kind, params.guildId, params.name);
     const replaced = this.cancelKey(k);
-    const timer: Timer = { ...params, setAt: now, dueAt: now + ms };
+    const timer: Timer = { kind, ...params, setAt: now, dueAt };
     store.setSetting(k, JSON.stringify(timer));
     this.schedule(k, timer);
     return { ok: true, timer, replaced };
   }
 
-  /** Returns whether there was such a timer. */
-  cancel(guildId: string, name: string): boolean {
-    return this.cancelKey(key(guildId, name));
+  /** Returns whether there was one by that name. */
+  cancel(guildId: string, name: string, kind: TimerKind = 'timer'): boolean {
+    return this.cancelKey(key(kind, guildId, name));
   }
 
   private cancelKey(k: string): boolean {
@@ -123,7 +142,11 @@ export class Timers {
 
   private schedule(k: string, timer: Timer): void {
     const wait = Math.max(0, timer.dueAt - Date.now());
-    const handle = setTimeout(() => void this.fire(k, timer), wait);
+    // An alarm weeks away outlasts one setTimeout; wait in steps.
+    const handle =
+      wait > MAX_WAIT_MS
+        ? setTimeout(() => this.schedule(k, timer), MAX_WAIT_MS)
+        : setTimeout(() => void this.fire(k, timer), wait);
     handle.unref?.();
     this.handles.set(k, handle);
   }
@@ -137,9 +160,14 @@ export class Timers {
       const channel = await this.client?.channels.fetch(timer.channelId);
       if (channel?.type !== ChannelType.GuildText) return;
       await (channel as TextChannel).send({
-        content: late
-          ? text.timer.expiredLate(timer.name, timer.userId, timer.setAt)
-          : text.timer.expired(timer.name, timer.userId, timer.setAt),
+        content:
+          timer.kind === 'alarm'
+            ? late
+              ? text.alarm.ringingLate(timer.name, timer.userId, timer.dueAt)
+              : text.alarm.ringing(timer.name, timer.userId, timer.dueAt)
+            : late
+              ? text.timer.expiredLate(timer.name, timer.userId, timer.setAt)
+              : text.timer.expired(timer.name, timer.userId, timer.setAt),
         allowedMentions: { users: [timer.userId] },
       });
     } catch (err) {
