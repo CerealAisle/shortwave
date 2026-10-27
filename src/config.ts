@@ -26,6 +26,15 @@ const fields = z.object({
     .transform((v) => (v && v.trim() ? v.trim() : undefined)),
 
   LOVENSE_TOKEN: z.string().min(1),
+  // Socket API diagnostics: a second, listen-only connection to Lovense that
+  // reports when Lovense itself sees her app go online or offline. Nothing is
+  // sent over it; commands still go through the Standard API. Needs the
+  // "Website Name" from the Lovense developer dashboard as LOVENSE_PLATFORM.
+  SOCKET_DIAGNOSTICS: bool,
+  LOVENSE_PLATFORM: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
   USER_TOKEN_SALT: z.string().min(16, 'must be at least 16 chars'),
 
   CALLBACK_PORT: z.coerce.number().int().positive().default(4000),
@@ -62,10 +71,11 @@ const fields = z.object({
   HEARTBEAT_TIMEOUT_SEC: z.coerce.number().min(0).default(300),
   PRESENCE_POLL_SEC: z.coerce.number().min(5).default(15),
 
-  // Active liveness probe, and the primary presence signal. Each linked toy
-  // is sent Vibrate:0 for ~1.1s — nothing moves — and Lovense's answer says
-  // whether a real command would land right now: 200 reachable, 507 app
-  // offline, 501/503 link or token problem. While a toy is unreachable the
+  // Active liveness probe, sent only while tease is on. Her toys are sent
+  // Vibrate:0 for ~1.1s — nothing moves — and Lovense's answer says whether
+  // a real command would land right now: 200 reachable, 507 app offline,
+  // 501/503 link or token problem. It never goes out while another command
+  // is being sent or is still running. While a toy is unreachable the
   // interval backs off to PROBE_OFFLINE_INTERVAL_SEC so a dead link doesn't
   // fill the log. Set PROBE_INTERVAL_SEC to 0 to disable probing.
   PROBE_INTERVAL_SEC: z.coerce.number().min(0).default(300),
@@ -103,12 +113,17 @@ const fields = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 
-const schema = fields.refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
-  // One channel doing both jobs would put every bot notice in front of the
-  // person the command channel exists to keep them from.
-  message: 'must differ from MAIN_CHANNEL_ID',
-  path: ['COMMAND_CHANNEL_ID'],
-});
+const schema = fields
+  .refine((c) => c.MAIN_CHANNEL_ID !== c.COMMAND_CHANNEL_ID, {
+    // One channel doing both jobs would put every bot notice in front of the
+    // person the command channel exists to keep them from.
+    message: 'must differ from MAIN_CHANNEL_ID',
+    path: ['COMMAND_CHANNEL_ID'],
+  })
+  .refine((c) => !c.SOCKET_DIAGNOSTICS || c.LOVENSE_PLATFORM, {
+    message: 'is required when SOCKET_DIAGNOSTICS is on: the Website Name from the Lovense dashboard',
+    path: ['LOVENSE_PLATFORM'],
+  });
 
 /**
  * `dotenv/config` fails silently: a missing .env, an unreadable one and an

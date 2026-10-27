@@ -49,6 +49,14 @@ describe('fix-it steps', () => {
     assert.match(text.fixSteps.backgrounded('1'), /Force-quit/);
   });
 
+  it('an app that stopped checking in gets the log-out-and-in steps', () => {
+    assert.equal(fixStepsFor({ ok: false, code: 507, message: '' }, false, true), 'notCheckingIn');
+    assert.match(text.fixSteps.notCheckingIn('1'), /log out and log back in/);
+    // Backgrounded wins: check-ins can't be both fresh and stopped, but the
+    // force-quit steps are the ones that fix a refusing, checking-in app.
+    assert.equal(fixStepsFor({ ok: false, code: 507, message: '' }, true, false), 'backgrounded');
+  });
+
   it('a closed app, a lost link and a network failure each get their own steps', () => {
     assert.equal(fixStepsFor({ ok: false, code: 507, message: '' }, false), 'appClosed');
     assert.equal(fixStepsFor({ ok: false, code: 503, message: '' }, false), 'unlinked');

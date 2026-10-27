@@ -3,6 +3,7 @@ import { Events } from 'discord.js';
 import { config } from '../../config';
 import { log } from '../../logger';
 import { sessions } from '../../session/manager';
+import { teaseLog } from '../tease-log';
 
 /**
  * The trigger path. Guards, in order:
@@ -26,12 +27,18 @@ export function registerMessageTrigger(client: Client): void {
       // The person wearing the toy doesn't set it off by talking.
       if (session.ownerId === message.author.id) continue;
 
-      const result = await sessions.handleTrigger(session, `message:${message.id}`);
-      if (result === 'failed') {
-        log.warn(`Buzz failed for ${session.ownerId} on message ${message.id}`);
+      const outcome = await sessions.handleTrigger(session, `message:${message.id}`);
+      if (outcome.result === 'failed') {
+        log.warn(`Buzz failed for ${session.ownerId} on message ${message.id}: ${outcome.error}`);
       }
-      // 'throttled', 'offline' and 'suspended' are all expected outcomes over
-      // a long session and are counted on the session, not logged per message.
+      // Every outcome, including the expected ones, goes in the tease log in
+      // the command channel, with why it wasn't sent.
+      teaseLog.trigger(session, {
+        at: message.createdTimestamp,
+        authorId: message.author.id,
+        messageUrl: message.url,
+        outcome,
+      });
     }
   });
 

@@ -44,8 +44,17 @@ export function nextProbeAt(input: {
 }
 
 /**
- * Sends every linked toy a Vibrate:0 on an interval, so presence rests on a
- * test of the real command path rather than on heartbeats alone.
+ * While tease is on, sends her toys a Vibrate:0 on an interval, so a session
+ * pauses and resumes on a test of the real command path rather than on
+ * heartbeats alone.
+ *
+ * Only while tease is on. With tease off nothing depends on knowing, and a
+ * probe every few minutes is a command that can cut into Live Control from
+ * Lovense Remote. Presence then rests on check-ins and on whatever commands
+ * are actually sent, and /tease checks for itself before it starts.
+ *
+ * Only links in this server: a link left behind in another guild would
+ * otherwise be probed, and fail, forever.
  */
 export class Prober {
   private timer: NodeJS.Timeout | null = null;
@@ -62,7 +71,7 @@ export class Prober {
     this.timer = setInterval(() => this.tick(), config.PRESENCE_POLL_SEC * 1000);
     this.timer.unref?.();
     log.info(
-      `Prober running (every ${config.PROBE_INTERVAL_SEC}s, ` +
+      `Prober running while tease is on (every ${config.PROBE_INTERVAL_SEC}s, ` +
         `${config.PROBE_OFFLINE_INTERVAL_SEC}s while unreachable)`,
     );
     this.tick();
@@ -73,9 +82,13 @@ export class Prober {
     this.timer = null;
   }
 
-  private tick(now = Date.now()): void {
-    for (const link of store.listAll()) {
+  /** Public for tests. */
+  tick(now = Date.now()): void {
+    for (const link of store.listByGuild(config.DISCORD_GUILD_ID)) {
       if (this.inFlight.has(link.uid)) continue;
+      if (!sessions.hasSession(link.uid)) continue;
+      // Something is being sent right now. Its answer is as good as a probe.
+      if (sessions.isBusy(link.uid, now)) continue;
 
       const due = nextProbeAt({
         lastResult: presence.lastResult(link.uid),
