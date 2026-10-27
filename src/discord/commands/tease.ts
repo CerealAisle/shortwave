@@ -1,7 +1,7 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { config } from '../../config';
 import * as actions from '../../lovense/actions';
-import { makeUid } from '../../lovense/client';
+import { explainCode, makeUid } from '../../lovense/client';
 import { focusLabel, focusTargets, getFocus } from '../../session/focus';
 import { sessions } from '../../session/manager';
 import { presence } from '../../session/presence';
@@ -78,13 +78,21 @@ export const command: BotCommand = {
       return;
     }
 
-    const status = presence.statusFor(target.link);
+    // With tease off nothing re-checks her app, so an "unreachable" here may
+    // be hours old. Check once now (a 0% command) rather than refuse on it.
+    let status = presence.statusFor(target.link);
+    let deferred = false;
     if (status.presence === 'offline') {
-      await interaction.reply({
-        content: text.tease.unreachable(target.name),
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
+      await interaction.deferReply();
+      deferred = true;
+      const check = await sessions.test(uid, { source: `tease-check:${interaction.user.id}` });
+      if (!check.ok) {
+        await interaction.editReply(
+          text.tease.unreachableNow(target.name, explainCode(check.code), check.code),
+        );
+        return;
+      }
+      status = presence.statusFor(target.link);
     }
 
     const { session, created } = sessions.arm({
@@ -109,6 +117,7 @@ export const command: BotCommand = {
         ? text.tease.notConfirmed
         : '';
 
-    await interaction.reply(reply + problem + notConfirmed);
+    if (deferred) await interaction.editReply(reply + problem + notConfirmed);
+    else await interaction.reply(reply + problem + notConfirmed);
   },
 };

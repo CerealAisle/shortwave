@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { MIN_RETRY_AFTER_CALLBACK_MS, nextProbeAt } from './prober';
+import { after, afterEach, beforeEach, describe, it, mock } from 'node:test';
+import { config } from '../config';
+import { makeUid } from '../lovense/client';
+import { store } from '../store/store';
+import { sessions } from './manager';
+import { MIN_RETRY_AFTER_CALLBACK_MS, Prober, nextProbeAt } from './prober';
 
 /**
  * The probe sends Vibrate:0. It moves nothing on its own, but it does replace
@@ -60,5 +64,62 @@ describe('nextProbeAt', () => {
     const busyUntil = T + ONLINE + 60_000;
     assert.equal(due({ lastResult: { at: T, ok: true }, busyUntil }), busyUntil);
     assert.equal(due({ busyUntil }), busyUntil);
+  });
+});
+
+describe('Prober.tick', () => {
+  // Probes only go out while tease is on: with it off, nothing depends on
+  // the answer, and a probe is a command that can cut into Live Control.
+  const GUILD = config.DISCORD_GUILD_ID;
+  const USER = 'prober-wearer';
+  const UID = makeUid(GUILD, USER);
+  const ELSEWHERE = makeUid('another-guild', USER);
+  let probed: string[] = [];
+
+  beforeEach(() => {
+    probed = [];
+    store.createLink(UID, GUILD, USER, 'wearer');
+    store.recordCallback(UID, [], 'ios');
+    store.createLink(ELSEWHERE, 'another-guild', USER, 'wearer');
+    store.recordCallback(ELSEWHERE, [], 'ios');
+    mock.method(sessions, 'probe', async (uid: string) => {
+      probed.push(uid);
+      return 'ok' as const;
+    });
+  });
+
+  afterEach(async () => {
+    sessions.disarm(GUILD, USER, { silent: true });
+    sessions.disarm('another-guild', USER, { silent: true });
+    mock.restoreAll();
+  });
+
+  after(() => {
+    store.deleteLink(UID);
+    store.deleteLink(ELSEWHERE);
+  });
+
+  it('sends nothing while tease is off', () => {
+    new Prober().tick();
+    assert.deepEqual(probed, []);
+  });
+
+  it('probes her while tease is on', () => {
+    sessions.arm({ uid: UID, guildId: GUILD, ownerId: USER });
+    new Prober().tick();
+    assert.deepEqual(probed, [UID]);
+  });
+
+  it('never probes a link left behind in another server', () => {
+    sessions.arm({ uid: ELSEWHERE, guildId: 'another-guild', ownerId: USER });
+    new Prober().tick();
+    assert.deepEqual(probed, []);
+  });
+
+  it('waits while something is being sent or running', () => {
+    sessions.arm({ uid: UID, guildId: GUILD, ownerId: USER });
+    mock.method(sessions, 'isBusy', () => true);
+    new Prober().tick();
+    assert.deepEqual(probed, []);
   });
 });

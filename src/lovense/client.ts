@@ -58,7 +58,7 @@ export function makeUid(guildId: string, discordUserId: string): string {
   return `${guildId}:${discordUserId}`;
 }
 
-async function postJson(url: string, body: unknown): Promise<any> {
+export async function postJson(url: string, body: unknown): Promise<any> {
   let res: Response;
   try {
     res = await fetch(url, {

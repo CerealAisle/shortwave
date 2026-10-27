@@ -46,8 +46,9 @@ Hosting notes for specific platforms:
 4. [Configuration reference](#configuration-reference)
 5. [Commands](#commands)
 6. [Adding a new command](#adding-a-new-command)
-7. [Troubleshooting](#troubleshooting)
-8. [Security notes](#security-notes)
+7. [Socket API diagnostics](#socket-api-diagnostics)
+8. [Troubleshooting](#troubleshooting)
+9. [Security notes](#security-notes)
 
 ---
 
@@ -99,6 +100,7 @@ src/
 │   ├── actions.ts              action builders; percent→level conversion
 │   ├── patterns.ts             loads and validates patterns/*.json
 │   ├── toys.ts                 toy names, lookup and suggestions
+│   ├── socket.ts               Socket API diagnostics (listen-only, optional)
 │   └── client.ts               HTTP transport, uid/utoken derivation, errors
 │
 ├── store/
@@ -107,7 +109,7 @@ src/
 ├── session/
 │   ├── rate-limiter.ts         min-interval + sliding per-minute cap
 │   ├── presence.ts             liveness from command results + heartbeats
-│   ├── prober.ts               Vibrate:0 probe loop with offline backoff
+│   ├── prober.ts               Vibrate:0 probe loop while tease is on
 │   └── manager.ts              session state machine, dispatch choke point
 │
 ├── http/
@@ -120,6 +122,7 @@ src/
     ├── channels.ts             main / command channel roles
     ├── client.ts               Discord client + interaction router
     ├── status-board.ts         pinned live-status post in the command channel
+    ├── tease-log.ts            per-session log of every message and its buzz
     ├── notify.ts               posts to a channel; notices to the command channel
     ├── failure.ts              a failed send, as a reply
     ├── toy-option.ts           the shared `toy` option and its autocomplete
@@ -195,16 +198,27 @@ before you change anything:
   crash, reboot or `systemctl restart` comes back disarmed.
 - **Shutdown stops the toy.** `SIGTERM` sends a Stop to every armed toy before
   the process exits; systemd's `TimeoutStopSec=20` gives it room to finish.
-- **Presence is tested, not inferred.** Every `PROBE_INTERVAL_SEC` (default
-  5 min) each linked toy is sent `Vibrate:0` for ~1.1 s — nothing moves — and
-  Lovense's answer is definitive for the exact path a real buzz takes: `200`
-  reachable, `507` app offline, `501`/`503` link or token problem. Any real
-  command's answer counts the same way and postpones the next probe. A probe
-  is never sent while a command is still running on the toy, since it would
-  cut it short. While a toy is unreachable the interval backs off to
-  `PROBE_OFFLINE_INTERVAL_SEC` (15 min), and a heartbeat arriving brings the
-  next probe forward. Heartbeats remain a secondary signal for when there is
-  no recent result.
+- **While tease is on, presence is tested, not inferred.** Every
+  `PROBE_INTERVAL_SEC` (default 5 min) her toys are sent `Vibrate:0` for
+  ~1.1 s — nothing moves — and Lovense's answer is definitive for the exact
+  path a real buzz takes: `200` reachable, `507` app offline, `501`/`503`
+  link or token problem. Any real command's answer counts the same way and
+  postpones the next probe. While a toy is unreachable the interval backs
+  off to `PROBE_OFFLINE_INTERVAL_SEC` (15 min), and a heartbeat arriving
+  brings the next probe forward.
+- **The probe gives way to everything.** It is never sent while another
+  command is on its way to Lovense or still running on the toy, and it
+  re-checks before each wake retry, so it can't cut a buzz or pattern short.
+  **With tease off there is no probing at all.** Nothing depends on the
+  answer then, and a command every few minutes can cut into Live Control
+  from Lovense Remote. Presence then rests on check-ins and on whatever
+  commands are actually sent, the board says how old an "unreachable" is,
+  and `/tease` checks again for itself before refusing. Probes don't keep
+  the connection alive — the overnight drops happened with probing on.
+- **The app going quiet is noticed.** Lovense Remote checks in every ~10 s.
+  If it stops for `HEARTBEAT_TIMEOUT_SEC`, the board says so — even while
+  commands still get through — the tease log notes it, and `/test` gives
+  steps that include checking she is logged in and logging out and back in.
 - **Losing the toy pauses the session, it doesn't end it.** If a probe or
   command fails, heartbeats stop for `HEARTBEAT_TIMEOUT_SEC` with no recent
   successful command, or the app reports no connected toy, the session
@@ -229,13 +243,29 @@ before you change anything:
   means, and a "looks backgrounded" warning when the app is checking in but
   refusing commands. The bot posts only four things to the command channel
   on its own: a new connection, the tease reminder, tease turning itself off
-  after a long outage, and someone running `/stop` elsewhere.
+  after a long outage, and someone running `/stop` elsewhere — plus the tease
+  log, below.
+- **The tease log.** While tease is on, one message in the command channel
+  is edited as messages come in: the last dozen messages in the main channel,
+  who wrote each (with a link), and what happened — **sent** at what
+  strength and length and which buzz number it was, **throttled** (too soon
+  after the last buzz, or the per-minute cap), or **not sent** / **failed**
+  and why (paused, app unreachable with the code, focused toy disconnected,
+  `/stop` timer). Pauses, resumes, check-ins stopping and Socket API events
+  appear between them. When tease ends it gets a final line and stays as a
+  record; the next session starts a new one. Discord can't show a reply to a
+  chat message to only one person, so this is the private view. Mentions in
+  it never ping.
 - **No DMs.** When `/test` finds a toy not responding for a reason she can
   fix, the steps for that failure — force-quit a backgrounded app, open a
   closed one, reconnect Bluetooth, re-pair a lost link — are posted in the
   main channel with an @mention, so the push notification still reaches her.
   If `/test` was run in the main channel they're part of its reply.
-- **`/tease` refuses an unreachable toy** rather than starting into the void.
+- **`/tease` refuses an unreachable toy** rather than starting into the void —
+  after checking once with a 0% command, since with tease off the last
+  answer may be hours old.
+- **`/test` won't interrupt.** Its 0% command would replace a buzz or pattern
+  that is still running, so while one is, it says so and sends nothing.
 - **Rate limiting is on by default.** `MIN_COMMAND_INTERVAL_MS` (1.5 s) and
   `MAX_COMMANDS_PER_MINUTE` (25) mean a message flood doesn't turn into a
   continuous vibration. Excess triggers are dropped, not queued.
@@ -314,6 +344,8 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `MAIN_CHANNEL_ID` | — | Shared channel; only messages here trigger buzzes |
 | `COMMAND_CHANNEL_ID` | — | Bot's home; all bot-initiated messages go here. Must differ from main |
 | `LOVENSE_TOKEN` | — | Lovense developer token |
+| `SOCKET_DIAGNOSTICS` | `false` | Listen-only Socket API connection reporting Lovense's own view of her app; see [Socket API diagnostics](#socket-api-diagnostics) |
+| `LOVENSE_PLATFORM` | — | The **Website Name** from the Lovense dashboard. Required when `SOCKET_DIAGNOSTICS` is on |
 | `USER_TOKEN_SALT` | — | `openssl rand -hex 32`; derives per-user `utoken` |
 | `CALLBACK_PORT` | `4000` | Local port for the webhook server |
 | `CALLBACK_PATH` | `/lovense/callback` | Must match the Lovense dashboard |
@@ -329,7 +361,7 @@ Install whichever fits, always *as* `lovense-bot.service`:
 | `STOP_LOCKOUT_MINUTES` | `30` | After `/stop`, how long nothing that moves can start. `/stop duration:` overrides it per use; a later `/stop` replaces it, and `duration:0` lifts it |
 | `HEARTBEAT_TIMEOUT_SEC` | `300` | Offline threshold; `0` disables liveness |
 | `PRESENCE_POLL_SEC` | `15` | How often to sweep for stale links and due probes |
-| `PROBE_INTERVAL_SEC` | `300` | `Vibrate:0` liveness probe per toy; `0` disables |
+| `PROBE_INTERVAL_SEC` | `300` | `Vibrate:0` liveness probe, only while tease is on; `0` disables |
 | `PROBE_OFFLINE_INTERVAL_SEC` | `900` | Probe interval while a toy is unreachable |
 | `OFFLINE_GRACE_SEC` | `300` | Pause-before-disarm window; `0` disarms on first blip |
 | `WAKE_RETRY_ATTEMPTS` | `2` | Retries for a 507 from a sleeping iOS app |
@@ -470,6 +502,44 @@ all similar handlers on the same client.
 
 ---
 
+## Socket API diagnostics
+
+Off by default. With `SOCKET_DIAGNOSTICS=true` and `LOVENSE_PLATFORM` set to
+the **Website Name** from the Lovense developer dashboard, the bot opens a
+second, **listen-only** connection to Lovense's Socket API for her link.
+Commands still go through the Standard API; nothing is sent over the socket.
+
+What it adds is Lovense's own view of her app. The Standard API only says
+`507` when a command happens to be sent; the Socket API pushes an event when
+Lovense sees the app go online or offline. That shows up as:
+
+- a `📡` line on the status board, and a line at the bottom of `/test`;
+- a note in the tease log when it changes;
+- `Socket …` lines in the journal, with every event's raw payload
+  (`logs.sh` includes them).
+
+It is an experiment, and it may tell us nothing:
+
+- Lovense documents the events but not their payloads, so the parser is
+  forgiving and the raw payloads are logged so they can be checked.
+- Lovense may report only on apps paired through the Socket API's own QR
+  code, not the Standard API's. If the board stays on "connected, no report
+  on the app yet" through an outage, that's the likely reason.
+- The socket client is Socket.IO 2.x, which Lovense requires. `npm audit`
+  flags a moderate regular-expression issue in its URL parser; the only URL
+  it parses is the one Lovense returns.
+- If "Line busy" gets worse with it on, turn it off: it is the one other
+  thing connected on her behalf.
+
+Try it on staging first. The useful question is what Lovense reports at the
+moment commands start returning `507`:
+
+```bash
+sudo /opt/lovense-bot-staging/deploy/logs.sh --grep 'Socket|unreachable|Presence|Check-ins'
+```
+
+---
+
 ## Troubleshooting
 
 **Lovense server error codes** (surfaced in command replies and the log):
@@ -578,6 +648,29 @@ in the main channel with an @mention, which raises a push notification. Make
 sure she hasn't muted mentions in that channel, and on iOS add Discord to any
 Focus mode that might be active.
 
+**"Line busy, please try again later!" in Lovense Remote.** Lovense Remote
+shows this when a control session can't start because it considers the app
+already in use. The bot's link is a third-party connection to her app, so
+recent bot commands are a plausible cause; Lovense doesn't document it.
+Things to know:
+
+- **There is no way to close the link from the bot's side.** Lovense's API
+  has no disconnect or unbind call. The link ends only when she taps
+  **Toy → Stop** in the Lovense Remote banner, and then `/connect` is needed
+  to link again.
+- **What the bot can do is stop sending.** With tease off it sends nothing on
+  its own: no probes. `/tease off:True` ends tease, and a single Stop goes out.
+- If it still happens with tease off and nothing sent for a while, the bot's
+  link isn't the cause. `db.sh commands 1` shows whether anything was sent
+  in the last hour; compare the times.
+
+**Lovense Remote stopped checking in.** The board shows "No check-in from
+Lovense Remote since…" and the tease log notes it. Commands may still get
+through for a while. It usually means the app was closed, the phone lost its
+connection, or she was logged out of Lovense. `/test` posts the steps: open
+the app, check she's logged in — if so, log out and back in — then `/test`
+again, and `/connect` to re-pair if that still fails.
+
 **Buzzes feel sparse during fast conversation.** That's `MIN_COMMAND_INTERVAL_MS`
 dropping triggers by design. Lower it if you want, but overlapping commands with
 `stopPrevious: 1` (the default) cancel each other, so going much below ~1 s
@@ -615,18 +708,30 @@ commands with `sudo -u lovensebot`, or add yourself to the group with
 `/usr/local/bin/node` specifically. Check `ls -l /usr/local/bin/node`;
 `deploy/setup-host.sh` recreates that symlink whichever install route it took.
 
-**Useful commands:**
+**Useful commands.** Two helper scripts in `deploy/` cover most of it. Each
+works on the instance it lives in, like `update.sh`, so the staging copy only
+ever reads staging. `--help` on either lists everything.
 
 ```bash
+# The journal, filtered to connection and presence lines (last 12 hours)
+sudo /opt/lovense-bot/deploy/logs.sh
+sudo /opt/lovense-bot/deploy/logs.sh "2026-10-15 21:00"     # since a time
+sudo /opt/lovense-bot/deploy/logs.sh "yesterday 22:00" --until "today 08:00"
+sudo /opt/lovense-bot/deploy/logs.sh --all                  # unfiltered
+sudo /opt/lovense-bot/deploy/logs.sh --follow               # live
+
+# The command log, read-only
+sudo /opt/lovense-bot/deploy/db.sh                          # last 24 hours
+sudo /opt/lovense-bot/deploy/db.sh commands 6 --failed      # failures, last 6 hours
+sudo /opt/lovense-bot/deploy/db.sh commands 24 --source probe
+sudo /opt/lovense-bot/deploy/db.sh summary 48               # per hour: ok, failed, 507s
+sudo /opt/lovense-bot/deploy/db.sh nights                   # first/last success and first 507, per night
+sudo /opt/lovense-bot/deploy/db.sh links                    # linked apps, last check-in
+
 sudo systemctl status lovense-bot
-journalctl -u lovense-bot -f
-journalctl -u lovense-bot -p warning --since "1 hour ago"
-sqlite3 /opt/lovense-bot/data/bot.db \
-  'SELECT datetime(created_at/1000,"unixepoch"), description, source, ok, error
-     FROM command_log ORDER BY id DESC LIMIT 20;'
 ```
 
-Set `LOG_LEVEL=debug` to see every trigger decision, including throttled ones.
+Set `LOG_LEVEL=debug` to see every trigger decision and every heartbeat.
 
 ---
 

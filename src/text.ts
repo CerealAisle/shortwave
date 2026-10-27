@@ -25,6 +25,8 @@ import { channelMention, time, userMention } from 'discord.js';
 const rel = (ms: number) => time(Math.floor(ms / 1000), 'R');
 /** A Discord clock time in the viewer's own timezone: "9:41 PM". */
 const at = (ms: number) => time(Math.floor(ms / 1000), 't');
+/** The same, with seconds: "9:41:07 PM". For the tease log. */
+const atSec = (ms: number) => time(Math.floor(ms / 1000), 'T');
 /** First letter upper-cased, for a phrase that starts a sentence. */
 const cap = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 /** " (507)", or nothing when there is no code. */
@@ -142,6 +144,11 @@ export const text = {
       'looks backgrounded — the app is still checking in, but commands are refused. Force-quit Lovense Remote and reopen it',
     /** 507 with no recent check-in. */
     appClosed: 'the app is closed or the phone is offline. Open Lovense Remote',
+    /** The app used to check in and has stopped. */
+    notCheckingIn:
+      "Lovense Remote has stopped checking in — it may be closed, offline, or logged out. Check she's logged in; if so, log out and back in",
+    /** What "not checking in" means, where a Lovense code would go. */
+    notCheckingInMeaning: 'no check-in from Lovense Remote',
   },
 
   // ===========================================================================
@@ -200,6 +207,16 @@ export const text = {
     /** Last line, small. */
     footer: (lastCheckIn: number) =>
       `-# The test sent a 0% vibrate command. Lovense Remote last check-in: ${rel(lastCheckIn)}.`,
+    /** Added when the app has stopped checking in, whatever the test said. */
+    checkInsStopped: (lastCheckIn: number) =>
+      `⚠️ Lovense Remote hasn't checked in since ${rel(lastCheckIn)}. If that keeps happening, check she's still logged in to the app.`,
+    /** A buzz or pattern is running, so the test didn't interrupt it. */
+    busy: (until: number) =>
+      `⏳ Something is running on the toys until ${at(until)} (${rel(until)}), so I didn't send a test — it would have cut it short. Try again after.`,
+    /** Added under `busy` when the command that's running went through. */
+    busyLastOk: (when: number) => `🟢 The last command, ${rel(when)}, went through.`,
+    /** Added when socket diagnostics are on: what Lovense itself reports. */
+    socket: (line: string) => `-# Lovense socket: ${line}`,
   },
 
   // ===========================================================================
@@ -231,6 +248,9 @@ export const text = {
     /** Her app is known unreachable, so starting would do nothing. */
     unreachable: (name: string) =>
       `${name}'s Lovense Remote isn't reachable. Run \`/test\` to see why.`,
+    /** Checked just now, before starting, and it didn't answer. */
+    unreachableNow: (name: string, meaning: string, code: number | undefined) =>
+      `${name}'s Lovense Remote didn't answer just now: ${meaning}${codeSuffix(code)}. Run \`/test\` to see why.`,
 
     /** Tease started. */
     started: (name: string, percent: number, sec: number, focus: string, mainChannelId: string) =>
@@ -382,6 +402,62 @@ export const text = {
     `${percent}% / ${sec}s · ${buzzes} buzz(es)${missed > 0 ? ` · ${missed} missed` : ''}`,
 
   // ===========================================================================
+  // The tease log: one message in the command channel per tease session,
+  // edited as messages come in. Shows the last few messages and what each did.
+  // Mentions in it never ping.
+  // ===========================================================================
+  teaseLog: {
+    header: (owner: string, percent: number, sec: number, focus: string) =>
+      `📋 **Tease log** — ${userMention(owner)} · ${percent}% / ${sec}s · reaching ${focus}`,
+    /** Under the header while tease is on. */
+    counts: (sent: number, throttled: number, notSent: number, since: number) =>
+      `-# ${sent} sent · ${throttled} throttled · ${notSent} not sent · on since ${rel(since)}`,
+    /** Replaces `counts` once tease is off. */
+    ended: (sent: number, throttled: number, notSent: number, endedAt: number) =>
+      `**Tease off** ${rel(endedAt)} — ${sent} sent · ${throttled} throttled · ${notSent} not sent.`,
+    /** Shown when more happened than fits. */
+    older: (n: number) => `-# … ${n} earlier`,
+
+    /** Who wrote the message and a link to it, at the start of each line. */
+    from: (when: number, author: string, url: string) => `${atSec(when)} ${userMention(author)} [message](${url})`,
+
+    sent: (from: string, percent: number, sec: number, buzz: number) =>
+      `✅ ${from} — **sent** ${percent}% · ${sec}s · buzz #${buzz}`,
+    throttledGap: (from: string, gapSec: number) =>
+      `⏳ ${from} — **throttled**: under ${gapSec}s since the last buzz`,
+    throttledQuota: (from: string, perMinute: number) =>
+      `⏳ ${from} — **throttled**: ${perMinute} buzzes in the last minute already`,
+    paused: (from: string) => `⏸️ ${from} — **not sent**: tease is paused, the app isn't reachable`,
+    offline: (from: string, meaning: string, code: number | undefined) =>
+      `🔴 ${from} — **not sent**: ${meaning}${codeSuffix(code)}`,
+    stopped: (from: string) => `🛑 ${from} — **not sent**: the /stop timer is running`,
+    unfocused: (from: string, error: string) => `🎯 ${from} — **not sent**: ${error}`,
+    failed: (from: string, meaning: string, code: number | undefined) =>
+      `❌ ${from} — **failed**: ${meaning}${codeSuffix(code)}`,
+
+    // Things that happen between messages.
+    note: (when: number, what: string) => `ℹ️ ${atSec(when)} — ${what}`,
+    notePaused: "paused: the app stopped answering. It resumes by itself if it's back soon",
+    noteResumed: 'resumed: the app is answering again',
+    noteCheckInsStopped: "Lovense Remote stopped checking in — it may be closed or logged out",
+    noteCheckInsResumed: 'Lovense Remote is checking in again',
+    noteSocket: (what: string) => `Lovense socket: ${what}`,
+  },
+
+  // ===========================================================================
+  // Socket API diagnostics (SOCKET_DIAGNOSTICS). What Lovense's own servers
+  // say about her app, shown on the board and in /test.
+  // ===========================================================================
+  socket: {
+    connecting: 'connecting…',
+    /** Connected, but Lovense hasn't said anything about the app yet. */
+    noReport: 'connected, no report on the app yet',
+    appOnline: (since: number) => `Lovense says the app is online (since ${rel(since)})`,
+    appOffline: (since: number) => `Lovense says the app is offline (since ${rel(since)})`,
+    down: (since: number, reason: string) => `not connected since ${rel(since)} (${reason})`,
+  },
+
+  // ===========================================================================
   // The pinned status board in the command channel
   // ===========================================================================
   board: {
@@ -412,6 +488,13 @@ export const text = {
       `unreachable${since ? ` since ${rel(since)}` : ''} — ${meaning}${codeSuffix(code)}`,
     unreachableSilent: (since: number | null) =>
       `unreachable${since ? ` since ${rel(since)}` : ''} — no check-in from Lovense Remote`,
+    /** Added to "unreachable" when tease is off, so nothing re-checks it. */
+    lastTried: (at: number) => ` · last tried ${rel(at)}`,
+    /** Its own line, when the app has stopped checking in but nothing says why yet. */
+    checkInsStopped: (lastCheckIn: number) =>
+      `⚠️ No check-in from Lovense Remote since ${rel(lastCheckIn)} — check she's logged in`,
+    /** Its own line, when socket diagnostics are on. */
+    socket: (line: string) => `📡 ${line}`,
     /** On its own line under "unreachable", when there is a specific fix. */
     hint: (hint: string) => `⚠️ ${cap(hint)}`,
     notScanned: 'QR not scanned yet',
@@ -471,8 +554,18 @@ export const text = {
       "**Your toy isn't responding** — Lovense Remote seems to be closed, or your phone is offline.\n\n" +
       'To fix it:\n' +
       '1. Open Lovense Remote and check your toy is connected.\n' +
-      '2. Make sure your phone has a data or Wi-Fi connection.\n' +
-      '3. Run `/test` to confirm.',
+      "2. Check you're still logged in to Lovense Remote.\n" +
+      '3. Make sure your phone has a data or Wi-Fi connection.\n' +
+      '4. Run `/test` to confirm.',
+    /** The app used to check in and has stopped: closed, offline or logged out. */
+    notCheckingIn: (user: string) =>
+      `${userMention(user)} ` +
+      "**Your toy isn't responding** — Lovense Remote has stopped checking in.\n\n" +
+      'To fix it:\n' +
+      '1. Open Lovense Remote and check your toy is connected.\n' +
+      "2. Check you're logged in. If you are, **log out and log back in**.\n" +
+      '3. Make sure your phone has a data or Wi-Fi connection.\n' +
+      '4. Run `/test`. If it still fails, run `/connect` and scan the new QR code.',
     /** The app answers but no toy is attached over Bluetooth. */
     bluetooth: (user: string) =>
       `${userMention(user)} ` +

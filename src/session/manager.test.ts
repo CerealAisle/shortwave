@@ -38,6 +38,8 @@ const HUSH = { id: 'hush1' };
 
 let sent: { uid: string; action: ToyAction; toyId?: string }[] = [];
 let failWith: Error | null = null;
+/** While set, every send waits on it: a request still in flight. */
+let hold: Promise<void> | null = null;
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const isStop = (a: ToyAction) => a.kind === 'function' && a.action === 'Stop';
@@ -47,8 +49,10 @@ const vibrations = () => sent.filter((c) => !isStop(c.action));
 beforeEach(() => {
   sent = [];
   failWith = null;
+  hold = null;
   mock.method(lovense, 'send', async (uid: string, action: ToyAction, toyId?: string) => {
     sent.push({ uid, action, toyId });
+    if (hold) await hold;
     if (failWith) throw failWith;
   });
   store.createLink(WEARER_UID, GUILD, WEARER, 'wearer');
@@ -195,7 +199,7 @@ describe('the /stop lockout', () => {
   it('turns tease triggers into misses rather than buzzes', async () => {
     const { session } = armWearer();
     sessions.lockOut(GUILD, 180_000, WEARER);
-    assert.equal(await sessions.handleTrigger(session, 'test'), 'stopped');
+    assert.equal((await sessions.handleTrigger(session, 'test')).result, 'stopped');
     assert.equal(vibrations().length, 0);
   });
 
@@ -343,7 +347,7 @@ describe('tease follows the focus at each message', () => {
 
   it('with focus on all, sends one command that reaches every connected toy', async () => {
     const { session } = armWearer();
-    assert.equal(await sessions.handleTrigger(session, 'test'), 'sent');
+    assert.equal((await sessions.handleTrigger(session, 'test')).result, 'sent');
     assert.deepEqual(vibrations().map((c) => c.toyId), [undefined]);
     assert.equal(session.triggerCount, 1);
   });
@@ -354,7 +358,7 @@ describe('tease follows the focus at each message', () => {
     checkIn([lush]);
     const { session } = armWearer();
     checkIn([lush, hush]);
-    assert.equal(await sessions.handleTrigger(session, 'test'), 'sent');
+    assert.equal((await sessions.handleTrigger(session, 'test')).result, 'sent');
     assert.deepEqual(vibrations().map((c) => c.toyId), [undefined]);
   });
 
@@ -376,7 +380,7 @@ describe('tease follows the focus at each message', () => {
     setFocus(GUILD, WEARER, { kind: 'toy', id: HUSH.id, label: 'hush' });
     checkIn([lush, { ...hush, status: 0 }]);
     const { session } = armWearer();
-    assert.equal(await sessions.handleTrigger(session, 'test'), 'unfocused');
+    assert.equal((await sessions.handleTrigger(session, 'test')).result, 'unfocused');
     assert.equal(vibrations().length, 0);
     assert.equal(session.missedCount, 1);
   });
@@ -386,15 +390,58 @@ describe('tease follows the focus at each message', () => {
     // guard may catch it. What matters: nothing is sent, and it's a miss.
     checkIn([{ ...lush, status: 0 }, { ...hush, status: 0 }]);
     const { session } = armWearer();
-    assert.notEqual(await sessions.handleTrigger(session, 'test'), 'sent');
+    assert.notEqual((await sessions.handleTrigger(session, 'test')).result, 'sent');
     assert.equal(vibrations().length, 0);
     assert.equal(session.missedCount, 1);
   });
 
   it('uses one rate-limit slot per message', async () => {
     const { session } = armWearer();
-    assert.equal(await sessions.handleTrigger(session, 'first'), 'sent');
-    assert.equal(await sessions.handleTrigger(session, 'second'), 'throttled');
+    assert.equal((await sessions.handleTrigger(session, 'first')).result, 'sent');
+    assert.equal((await sessions.handleTrigger(session, 'second')).result, 'throttled');
   });
 });
 
+
+describe('the probe gives way to every other command', () => {
+  // The probe's Vibrate:0 replaces whatever is running. It must never cut
+  // short a buzz, a pattern, or a command still on its way.
+
+  it('sends one Vibrate:0 when nothing else is going on', async () => {
+    assert.equal(await sessions.probe(WEARER_UID), 'ok');
+    assert.equal(sent.length, 1);
+  });
+
+  it('sends nothing while a buzz is still running', async () => {
+    await sessions.sendNow(WEARER_UID, actions.vibrate(50, 30), 'test');
+    sent = [];
+    assert.equal(await sessions.probe(WEARER_UID), 'skipped');
+    assert.equal(sent.length, 0);
+    await sessions.sendNow(WEARER_UID, actions.stop(), 'test');
+  });
+
+  it('sends nothing while another request is in flight', async () => {
+    let release!: () => void;
+    hold = new Promise((resolve) => (release = resolve));
+    const inFlight = sessions.sendNow(WEARER_UID, actions.stop(), 'test');
+    assert.equal(sessions.isBusy(WEARER_UID), true);
+    assert.equal(await sessions.probe(WEARER_UID), 'skipped');
+    assert.equal(sent.length, 1, 'only the Stop went out');
+    release();
+    await inFlight;
+    assert.equal(sessions.isBusy(WEARER_UID), false);
+  });
+});
+
+describe('the ended event', () => {
+  it('fires when tease is turned off, so the tease log can close', async () => {
+    const ended: Session[] = [];
+    sessions.onEvent(({ type, session }) => {
+      if (type === 'ended') ended.push(session);
+    });
+    const { session } = armWearer();
+    sessions.disarm(GUILD, WEARER);
+    await flush();
+    assert.deepEqual(ended, [session]);
+  });
+});

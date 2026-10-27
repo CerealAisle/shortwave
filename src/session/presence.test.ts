@@ -244,6 +244,7 @@ describe('diagnose', () => {
     lastResult: { at: NOW, ok: false, code: 507 },
     connectedToys: [connectedToy],
     heartbeatsWorking: true,
+    checkInsStopped: false,
     ...over,
   });
 
@@ -257,6 +258,25 @@ describe('diagnose', () => {
     const d = diagnose(offline({ lastSeen: NOW - TIMEOUT_MS - 60_000 }), NOW);
     assert.equal(d?.backgrounded, false);
     assert.match(d?.hint ?? '', /closed or the phone is offline/);
+  });
+
+  it('a 507 after check-ins stopped points at being logged out', () => {
+    const d = diagnose(
+      offline({ lastSeen: NOW - TIMEOUT_MS - 60_000, checkInsStopped: true }),
+      NOW,
+    );
+    assert.equal(d?.silent, true);
+    assert.match(d?.hint ?? '', /logged in/);
+  });
+
+  it('explains an app that went quiet before any command failed', () => {
+    const d = diagnose(
+      offline({ lastResult: null, lastSeen: NOW - TIMEOUT_MS - 60_000, checkInsStopped: true }),
+      NOW,
+    );
+    assert.equal(d?.silent, true);
+    assert.equal(d?.code, undefined);
+    assert.match(d?.hint ?? '', /log out and back in/);
   });
 
   it('explains other codes without guessing at a fix', () => {

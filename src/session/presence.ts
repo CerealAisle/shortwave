@@ -40,9 +40,32 @@ export interface PresenceStatus {
   connectedToys: LovenseToy[];
   /** True once we've seen enough callbacks to trust the signal. */
   heartbeatsWorking: boolean;
+  /**
+   * The app used to check in and has gone quiet for longer than
+   * HEARTBEAT_TIMEOUT_SEC: closed, phone offline, or logged out of Lovense.
+   * Reported whatever a command just said — a 200 can still get through
+   * for a while after check-ins stop.
+   */
+  checkInsStopped: boolean;
+}
+
+/** Whether a link that used to check in has gone quiet. */
+export function checkInsStopped(
+  link: Pick<ToyLink, 'lastSeen' | 'callbackCount'>,
+  now = Date.now(),
+): boolean {
+  return (
+    config.HEARTBEAT_TIMEOUT_SEC > 0 &&
+    link.callbackCount > 1 &&
+    link.lastSeen !== null &&
+    now - link.lastSeen > config.HEARTBEAT_TIMEOUT_SEC * 1000
+  );
 }
 
 export type CommandResultListener = (payload: { uid: string; ok: boolean }) => void;
+
+/** Check-ins from a link stopped, or started again. */
+export type CheckInListener = (payload: { link: ToyLink; stopped: boolean }) => void;
 
 /** Why a link is unreachable, in words, for the board and the outage notice. */
 export interface Diagnosis {
@@ -53,6 +76,8 @@ export interface Diagnosis {
   hint: string | null;
   /** Heartbeats still arriving while commands are refused. */
   backgrounded: boolean;
+  /** The app has stopped checking in, as well. */
+  silent: boolean;
 }
 
 /**
@@ -62,8 +87,21 @@ export interface Diagnosis {
  * fixes it; a force-quit does.
  */
 export function diagnose(status: PresenceStatus, now = Date.now()): Diagnosis | null {
+  if (status.presence !== 'offline') return null;
   const result = status.lastResult;
-  if (status.presence !== 'offline' || !result || result.ok) return null;
+  const silent = status.checkInsStopped;
+
+  // Nothing has failed, but the app has gone quiet.
+  if (!result || result.ok) {
+    if (!silent) return null;
+    return {
+      code: undefined,
+      meaning: text.hints.notCheckingInMeaning,
+      hint: text.hints.notCheckingIn,
+      backgrounded: false,
+      silent,
+    };
+  }
 
   const heartbeatFresh =
     config.HEARTBEAT_TIMEOUT_SEC > 0 &&
@@ -73,9 +111,9 @@ export function diagnose(status: PresenceStatus, now = Date.now()): Diagnosis | 
   const backgrounded = result.code === 507 && heartbeatFresh;
   let hint: string | null = null;
   if (backgrounded) hint = text.hints.backgrounded;
-  else if (result.code === 507) hint = text.hints.appClosed;
+  else if (result.code === 507) hint = silent ? text.hints.notCheckingIn : text.hints.appClosed;
 
-  return { code: result.code, meaning: explainCode(result.code), hint, backgrounded };
+  return { code: result.code, meaning: explainCode(result.code), hint, backgrounded, silent };
 }
 
 export type PresenceTransitionListener = (payload: {
@@ -93,6 +131,9 @@ export class PresenceMonitor {
   private changedAt = new Map<string, number>();
   private listeners: PresenceTransitionListener[] = [];
   private resultListeners: CommandResultListener[] = [];
+  private checkInListeners: CheckInListener[] = [];
+  /** Links whose check-ins have stopped, as last seen by the sweep. */
+  private quiet = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
 
   /**
@@ -128,6 +169,10 @@ export class PresenceMonitor {
 
   onTransition(fn: PresenceTransitionListener): void {
     this.listeners.push(fn);
+  }
+
+  onCheckIns(fn: CheckInListener): void {
+    this.checkInListeners.push(fn);
   }
 
   /** Every command result Lovense gives, success or failure. */
@@ -198,6 +243,7 @@ export class PresenceMonitor {
     this.lastOk.delete(uid);
     this.lastKnown.delete(uid);
     this.changedAt.delete(uid);
+    this.quiet.delete(uid);
   }
 
   /**
@@ -218,7 +264,13 @@ export class PresenceMonitor {
     // The pairing callback counts as one; anything beyond it is a heartbeat.
     const heartbeatsWorking = link.callbackCount > 1;
     const lastResult = this.results.get(link.uid) ?? null;
-    const base = { lastSeen: link.lastSeen, lastResult, connectedToys, heartbeatsWorking };
+    const base = {
+      lastSeen: link.lastSeen,
+      lastResult,
+      connectedToys,
+      heartbeatsWorking,
+      checkInsStopped: checkInsStopped(link, now),
+    };
 
     // A 507 from Lovense outranks everything below, including a heartbeat
     // that arrived seconds ago: the app can be sending heartbeats while its
@@ -312,6 +364,34 @@ export class PresenceMonitor {
     this.timer = null;
   }
 
+  /**
+   * Check-ins stopping is worth saying on its own: commands can keep
+   * landing for a while after, and it is the one sign of the app being
+   * logged out or killed that doesn't need a command to fail first.
+   * Tracked apart from presence, which a recent 200 can keep online.
+   */
+  private watchCheckIns(link: ToyLink): void {
+    const stopped = checkInsStopped(link);
+    if (stopped === this.quiet.has(link.uid)) return;
+    if (stopped) this.quiet.add(link.uid);
+    else this.quiet.delete(link.uid);
+
+    if (stopped) {
+      log.warn(
+        `Check-ins from ${link.uid} stopped (last at ${new Date(link.lastSeen!).toISOString()})`,
+      );
+    } else {
+      log.info(`Check-ins from ${link.uid} resumed`);
+    }
+    for (const fn of this.checkInListeners) {
+      try {
+        fn({ link, stopped });
+      } catch (err) {
+        log.error(`Check-in listener threw: ${(err as Error).message}`);
+      }
+    }
+  }
+
   private evaluate(uid: string): void {
     const link = store.getByUid(uid);
     if (!link) {
@@ -319,6 +399,8 @@ export class PresenceMonitor {
       this.changedAt.delete(uid);
       return;
     }
+
+    this.watchCheckIns(link);
 
     const { presence } = this.statusFor(link);
     const previous = this.lastKnown.get(uid);
@@ -342,3 +424,4 @@ export class PresenceMonitor {
 }
 
 export const presence = new PresenceMonitor();
+

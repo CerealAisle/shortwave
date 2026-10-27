@@ -50,9 +50,40 @@ export interface Session {
   triggerCount: number;
   /** Triggers dropped: app offline, session suspended, or focus not connected. */
   missedCount: number;
+  /** Triggers dropped by the rate limiter. Not misses: they were too close together. */
+  throttledCount: number;
 }
 
-export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder';
+/**
+ * `ended` fires whenever tease goes away — /tease off, /stop, /disconnect or
+ * the grace window closing — after the session has been removed.
+ */
+export type SessionEventType = 'suspended' | 'resumed' | 'grace-expired' | 'reminder' | 'ended';
+
+export type TriggerResult =
+  | 'sent'
+  | 'throttled'
+  | 'suspended'
+  | 'offline'
+  | 'stopped'
+  | 'unfocused'
+  | 'failed';
+
+/** What one message did, in enough detail for the tease log to say why. */
+export interface TriggerOutcome {
+  result: TriggerResult;
+  /** Strength and length sent (or that would have been). */
+  intensityPercent: number;
+  durationSec: number;
+  /** 'throttled': too soon after the last buzz, or the per-minute cap. */
+  throttle?: 'interval' | 'quota';
+  /** 'unfocused': why the focus can't be reached. */
+  focusError?: string;
+  /** 'failed' or 'offline': the Lovense code, undefined for a network failure. */
+  code?: number;
+  /** 'failed': the error message. */
+  error?: string;
+}
 
 export type SessionEventListener = (payload: {
   type: SessionEventType;
@@ -92,6 +123,14 @@ export class StopLockoutError extends Error {
   constructor(readonly lockout: Lockout) {
     super('Stopped — nothing new can start until the /stop timer runs out');
     this.name = 'StopLockoutError';
+  }
+}
+
+/** The probe gave way to another command. Never leaves the manager. */
+class ProbeYieldedError extends Error {
+  constructor() {
+    super('probe yielded to another command');
+    this.name = 'ProbeYieldedError';
   }
 }
 
@@ -138,6 +177,8 @@ export class SessionManager {
   private sessions = new Map<string, Session>();
   /** When whatever was last sent to each uid stops running on the toy. */
   private runningUntil = new Map<string, number>();
+  /** Requests to Lovense in flight right now, per uid. */
+  private sending = new Map<string, number>();
   /** Read-through cache of the persisted /stop lockout, per guild. */
   private lockouts = new Map<string, Lockout | null>();
   private eventListeners: SessionEventListener[] = [];
@@ -177,6 +218,12 @@ export class SessionManager {
 
   get(guildId: string, ownerId: string): Session | undefined {
     return this.sessions.get(this.key(guildId, ownerId));
+  }
+
+  /** Whether tease is on (armed or paused) for this link. */
+  hasSession(uid: string): boolean {
+    for (const s of this.sessions.values()) if (s.uid === uid) return true;
+    return false;
   }
 
   listForGuild(guildId: string): Session[] {
@@ -225,6 +272,7 @@ export class SessionManager {
       graceTimer: null,
       triggerCount: 0,
       missedCount: 0,
+      throttledCount: 0,
     };
 
     this.sessions.set(key, session);
@@ -340,6 +388,7 @@ export class SessionManager {
       log.warn(`Stop after disarm failed: ${(err as Error).message}`);
     });
 
+    this.emit('ended', session);
     return session;
   }
 
@@ -350,6 +399,7 @@ export class SessionManager {
       this.clearTimers(s);
       this.sessions.delete(this.key(s.guildId, s.ownerId));
     }
+    for (const s of active) this.emit('ended', s);
 
     // Stop every linked toy, not just the armed ones - a manual /buzz may
     // still be running on a toy that was never armed.
@@ -407,22 +457,21 @@ export class SessionManager {
   }
 
   /**
-   * A Discord message qualified as a trigger. The return value says what
-   * happened, so the caller can log it without spamming the channel.
+   * A Discord message qualified as a trigger. The outcome says what happened
+   * and why, for the tease log; nothing is posted from here.
    */
-  async handleTrigger(
-    session: Session,
-    source: string,
-  ): Promise<'sent' | 'throttled' | 'suspended' | 'offline' | 'stopped' | 'unfocused' | 'failed'> {
+  async handleTrigger(session: Session, source: string): Promise<TriggerOutcome> {
+    const base = { intensityPercent: session.intensityPercent, durationSec: session.durationSec };
+
     // /stop turns tease off, so this is a backstop, not the main guard.
     if (this.lockout(session.guildId)) {
       session.missedCount += 1;
-      return 'stopped';
+      return { result: 'stopped', ...base };
     }
 
     if (session.state === 'suspended') {
       session.missedCount += 1;
-      return 'suspended';
+      return { result: 'suspended', ...base };
     }
 
     // Skip known-offline apps before spending a rate-limit slot or an API
@@ -432,7 +481,8 @@ export class SessionManager {
     if (status?.presence === 'offline') {
       session.missedCount += 1;
       log.debug(`Trigger skipped for ${session.ownerId}: app offline`);
-      return 'offline';
+      const last = status.lastResult;
+      return { result: 'offline', ...base, code: last && !last.ok ? last.code : undefined };
     }
 
     // Which toys, decided now from the latest check-in: a toy that connected
@@ -444,14 +494,15 @@ export class SessionManager {
     if (!targets.ok) {
       session.missedCount += 1;
       log.debug(`Trigger skipped for ${session.ownerId}: ${targets.error}`);
-      return 'unfocused';
+      return { result: 'unfocused', ...base, focusError: targets.error };
     }
 
     // One slot per message, however many toys it buzzes.
     const gate = session.limiter.tryAcquire();
     if (!gate.allowed) {
+      session.throttledCount += 1;
       log.debug(`Trigger throttled (${gate.reason}) for ${session.ownerId}`);
-      return 'throttled';
+      return { result: 'throttled', ...base, throttle: gate.reason };
     }
 
     const action = actions.vibrate(session.intensityPercent, session.durationSec);
@@ -460,11 +511,16 @@ export class SessionManager {
         await this.sendWithWakeRetry(session.uid, action, source, toyId);
       }
       session.triggerCount += 1;
-      return 'sent';
+      return { result: 'sent', ...base };
     } catch (err) {
       session.missedCount += 1;
       this.emitError(session, err as Error);
-      return 'failed';
+      return {
+        result: 'failed',
+        ...base,
+        code: err instanceof LovenseError ? err.code : undefined,
+        error: (err as Error).message,
+      };
     }
   }
 
@@ -481,10 +537,15 @@ export class SessionManager {
     action: ToyAction,
     source: string,
     toyId?: string,
+    opts: { yieldToCommands?: boolean } = {},
   ): Promise<void> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= config.WAKE_RETRY_ATTEMPTS; attempt++) {
+      // The probe gives way to everything: its Vibrate:0 would cut short
+      // whatever another command just started. Checked before every attempt,
+      // because a buzz can land during the pause between retries.
+      if (opts.yieldToCommands && this.isBusy(uid)) throw new ProbeYieldedError();
       try {
         await this.sendNow(uid, action, attempt === 0 ? source : `${source}:retry${attempt}`, {
           deferOfflineReport: true,
@@ -516,14 +577,32 @@ export class SessionManager {
     return this.runningUntil.get(uid) ?? 0;
   }
 
+  /** A command is being sent right now, or is still running on the toy. */
+  isBusy(uid: string, now = Date.now()): boolean {
+    return (this.sending.get(uid) ?? 0) > 0 || this.busyUntil(uid) > now;
+  }
+
   /**
    * Liveness probe: Vibrate:0, through the same wake retry a real trigger
    * gets, so a sleeping iOS app that answers the second attempt counts as
    * reachable rather than raising a false "paused" notice. Only the final
    * outcome is reported to presence.
+   *
+   * 'skipped' means another command went out first. That command's own
+   * result answers the question, so nothing is recorded.
    */
-  async probe(uid: string): Promise<boolean> {
-    return (await this.test(uid, { source: 'probe' })).ok;
+  async probe(uid: string): Promise<'ok' | 'failed' | 'skipped'> {
+    try {
+      await this.sendWithWakeRetry(uid, actions.probe(), 'probe', undefined, { yieldToCommands: true });
+      return 'ok';
+    } catch (err) {
+      if (err instanceof ProbeYieldedError) {
+        log.debug(`Probe for ${uid} skipped: another command is running`);
+        return 'skipped';
+      }
+      this.recordTestFailure(uid, err);
+      return 'failed';
+    }
   }
 
   /**
@@ -536,11 +615,17 @@ export class SessionManager {
       await this.sendWithWakeRetry(uid, actions.probe(), opts.source ?? 'test', opts.toyId);
       return { ok: true };
     } catch (err) {
+      this.recordTestFailure(uid, err);
       const code = err instanceof LovenseError ? err.code : undefined;
-      if (code !== undefined) presence.markReportedOffline(uid, code);
-      else presence.noteFailed(uid, undefined);
       return { ok: false, code, message: (err as Error).message };
     }
+  }
+
+  /** A Vibrate:0 that failed is a direct answer about the link. */
+  private recordTestFailure(uid: string, err: unknown): void {
+    const code = err instanceof LovenseError ? err.code : undefined;
+    if (code !== undefined) presence.markReportedOffline(uid, code);
+    else presence.noteFailed(uid, undefined);
   }
 
   /**
@@ -583,6 +668,7 @@ export class SessionManager {
       );
     }
 
+    this.sending.set(uid, (this.sending.get(uid) ?? 0) + 1);
     try {
       await lovense.send(uid, action, opts.toyId);
       store.logCommand({ uid, description, source, ok: true });
@@ -620,6 +706,10 @@ export class SessionManager {
       }
 
       throw err;
+    } finally {
+      const left = (this.sending.get(uid) ?? 1) - 1;
+      if (left > 0) this.sending.set(uid, left);
+      else this.sending.delete(uid);
     }
   }
 

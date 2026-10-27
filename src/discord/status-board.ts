@@ -32,6 +32,8 @@ export interface BoardRow {
   session: Session | undefined;
   /** Which of their toys commands reach. */
   focus: Focus;
+  /** What the Socket API reports, when SOCKET_DIAGNOSTICS is on. */
+  socket?: string | null;
 }
 
 function formatDuration(ms: number): string {
@@ -41,31 +43,51 @@ function formatDuration(ms: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-function reachability(row: BoardRow): string {
+/** The reachability line, plus any warning lines under it. */
+function reachability(row: BoardRow): string[] {
   const { status, since } = row;
   const result = status.lastResult;
+  const lines: string[] = [];
+  let explainedSilence = false;
 
   switch (status.presence) {
     case 'online': {
-      if (result?.ok) return text.board.reachableProbed(result.at);
+      if (result?.ok) {
+        lines.push(text.board.reachableProbed(result.at));
+        break;
+      }
       // Online on the strength of check-ins, while the last command failed.
       const failed =
         result && !result.ok
           ? text.board.lastFailed(result.at, explainCode(result.code), result.code)
           : '';
-      return text.board.reachableHeartbeat + failed;
+      lines.push(text.board.reachableHeartbeat + failed);
+      break;
     }
     case 'offline': {
       const why = diagnose(status);
-      if (!why) return text.board.unreachableSilent(since);
-      return (
-        text.board.unreachable(since, why.meaning, why.code) +
-        (why.hint ? `\n> ${text.board.hint(why.hint)}` : '')
-      );
+      if (!why) {
+        lines.push(text.board.unreachableSilent(since));
+        explainedSilence = true;
+        break;
+      }
+      // With tease off nothing re-checks, so say how old the answer is.
+      const tried = !row.session && result && !result.ok ? text.board.lastTried(result.at) : '';
+      lines.push(text.board.unreachable(since, why.meaning, why.code) + tried);
+      if (why.hint) lines.push(text.board.hint(why.hint));
+      explainedSilence = why.silent;
+      break;
     }
     case 'unknown':
-      return row.link.lastSeen === null ? text.board.notScanned : text.board.notChecked;
+      lines.push(row.link.lastSeen === null ? text.board.notScanned : text.board.notChecked);
+      break;
   }
+
+  if (status.checkInsStopped && !explainedSilence && status.lastSeen !== null) {
+    lines.push(text.board.checkInsStopped(status.lastSeen));
+  }
+  if (row.socket) lines.push(text.board.socket(row.socket));
+  return lines;
 }
 
 function teaseText(session: Session | undefined, now: number): string {
@@ -107,7 +129,7 @@ export function renderBoardBody(
         text.board.person(link.displayName, link.discordUserId),
         ...toys.map((t) => `> ${t}`),
         `> ${text.board.focusAndTease(focusLabel(focus, link), teaseText(session, now))}`,
-        `> ${reachability(row)}`,
+        ...reachability(row).map((l) => `> ${l}`),
       ].join('\n');
     })
     .join('\n\n');

@@ -3,6 +3,8 @@ import { text } from './text';
 import { setBoard } from './discord/board-ref';
 import { notify } from './discord/notify';
 import { describeTease } from './discord/toy-option';
+import { teaseLog } from './discord/tease-log';
+import { socketMonitor } from './lovense/socket';
 
 import { config } from './config';
 import { log } from './logger';
@@ -29,6 +31,7 @@ async function main() {
         since: presence.since(link.uid),
         session: sessions.get(link.guildId, link.discordUserId),
         focus: getFocus(link.guildId, link.discordUserId),
+        socket: socketMonitor.describe(link.uid),
       })),
     () => {
       const lock = sessions.lockout(config.DISCORD_GUILD_ID);
@@ -39,6 +42,7 @@ async function main() {
   setBoard(board);
   client.once(Events.ClientReady, () => {
     board.start(client);
+    teaseLog.start(client);
     timers.start(client);
   });
 
@@ -48,6 +52,11 @@ async function main() {
   // itself off, the tease reminder, a new connection, and /stop (stop.ts).
   sessions.onEvent(({ type, session }) => {
     board.requestUpdate();
+
+    // The tease log in the command channel follows the session.
+    if (type === 'suspended') teaseLog.note(session, text.teaseLog.notePaused);
+    if (type === 'resumed') teaseLog.note(session, text.teaseLog.noteResumed);
+    if (type === 'ended') teaseLog.end(session);
 
     if (type === 'grace-expired') {
       void notify(client, text.channel.teaseOffAfterOutage(session.ownerId));
@@ -78,6 +87,27 @@ async function main() {
   sessions.onError(() => board.requestUpdate());
   presence.onResult(() => board.requestUpdate());
 
+  // Her app going quiet is on the board always, and in the tease log while
+  // tease is on. It doesn't post by itself.
+  presence.onCheckIns(({ link, stopped }) => {
+    board.requestUpdate();
+    const session = sessions.get(link.guildId, link.discordUserId);
+    if (session) {
+      teaseLog.note(
+        session,
+        stopped ? text.teaseLog.noteCheckInsStopped : text.teaseLog.noteCheckInsResumed,
+      );
+    }
+  });
+
+  // Socket API diagnostics: the same, for what Lovense itself reports.
+  socketMonitor.onChange(({ uid, what }) => {
+    board.requestUpdate();
+    const link = store.getByUid(uid);
+    const session = link ? sessions.get(link.guildId, link.discordUserId) : undefined;
+    if (session) teaseLog.note(session, text.teaseLog.noteSocket(what));
+  });
+
   // Liveness (probe results first, heartbeats second) drives suspend/resume rather than a hard stop.
   presence.onTransition(({ link, from, to }) => {
     board.requestUpdate();
@@ -93,9 +123,10 @@ async function main() {
 
   const server = await startCallbackServer(({ uid, toys, firstConnect }) => {
     board.requestUpdate();
+    const link = store.getByUid(uid);
+    if (link) socketMonitor.watch(link);
     if (!firstConnect) return;
     // The first callback is the QR scan landing.
-    const link = store.getByUid(uid);
     if (!link) return;
     const names = toys.map(toyLabel).join(', ') || text.channel.noToysReported;
     void notify(client, text.channel.connected(link.discordUserId, names));
@@ -104,6 +135,7 @@ async function main() {
   await client.login(config.DISCORD_TOKEN);
   presence.start();
   prober.start();
+  socketMonitor.start();
 
   const shutdown = async (signal: string) => {
     log.info(`${signal} received, shutting down`);
@@ -112,6 +144,7 @@ async function main() {
       timers.stop();
       prober.stop();
       presence.stop();
+      socketMonitor.stop();
       // Stop every toy before the process goes away.
       await sessions.shutdown();
       await server.close();

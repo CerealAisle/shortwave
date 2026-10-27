@@ -1,11 +1,13 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { config } from '../../config';
 import { explainCode, makeUid } from '../../lovense/client';
+import { socketMonitor } from '../../lovense/socket';
 import { isToyConnected, toyLabel } from '../../lovense/toys';
 import { sessions, type TestResult } from '../../session/manager';
 import { diagnose, presence } from '../../session/presence';
 import { text, type FixStepsKind } from '../../text';
 import { post } from '../notify';
+import { store } from '../../store/store';
 import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
@@ -16,11 +18,14 @@ import type { BotCommand } from '../types';
 export function fixStepsFor(
   result: TestResult,
   backgrounded: boolean,
+  /** The app used to check in and has stopped. */
+  silent = false,
 ): Exclude<FixStepsKind, 'bluetooth'> | null {
   if (result.ok) return null;
   switch (result.code) {
     case 507:
-      return backgrounded ? 'backgrounded' : 'appClosed';
+      if (backgrounded) return 'backgrounded';
+      return silent ? 'notCheckingIn' : 'appClosed';
     case 503:
       return 'unlinked';
     case undefined:
@@ -37,6 +42,8 @@ export function fixStepsFor(
  *
  * Zero strength, so it is allowed during a /stop lockout and can never
  * surprise anyone. A success also counts as the command that ends an outage.
+ * It does replace whatever is running, though, so while a buzz or pattern is
+ * still going it sends nothing and says so instead.
  *
  * When it fails for a reason she can fix, the steps are posted in the shared
  * channel with an @mention. The bot sends no DMs.
@@ -54,9 +61,19 @@ export const command: BotCommand = {
     const { link, self } = target;
     const lastSeen = link.lastSeen!;
 
+    const uid = makeUid(interaction.guildId, target.userId);
+    const runningUntil = sessions.busyUntil(uid);
+    if (runningUntil > Date.now()) {
+      const last = presence.lastResult(uid);
+      await interaction.reply({
+        content: [text.test.busy(runningUntil), ...(last?.ok ? [text.test.busyLastOk(last.at)] : [])].join('\n'),
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
     await interaction.deferReply();
 
-    const uid = makeUid(interaction.guildId, target.userId);
     const source = `test:${interaction.user.id}`;
     const connected = link.toys.filter(isToyConnected);
     const lines: string[] = [];
@@ -91,17 +108,27 @@ export const command: BotCommand = {
       lines.push(text.test.disconnected(toyLabel(toy)));
     }
 
-    const why = diagnose(presence.statusFor(link));
+    const status = presence.statusFor(store.getByUid(uid) ?? link);
+    const why = diagnose(status);
     if (why?.hint) lines.push(text.test.hint(why.hint));
+    if (status.checkInsStopped && !why?.silent && status.lastSeen !== null) {
+      lines.push(text.test.checkInsStopped(status.lastSeen));
+    }
 
-    const report = [text.test.heading(self, target.name), ...lines, text.test.footer(lastSeen)];
+    const socketLine = socketMonitor.describe(uid);
+    const report = [
+      text.test.heading(self, target.name),
+      ...lines,
+      text.test.footer(lastSeen),
+      ...(socketLine ? [text.test.socket(socketLine)] : []),
+    ];
 
     // The steps for this failure go to the shared channel, @-ing her: in this
     // reply if /test was run there, otherwise as a post of their own.
     const kind: FixStepsKind | null = bluetoothOnly
       ? 'bluetooth'
       : firstFailure
-        ? fixStepsFor(firstFailure, why?.backgrounded ?? false)
+        ? fixStepsFor(firstFailure, why?.backgrounded ?? false, status.checkInsStopped)
         : null;
     const steps = kind ? text.fixSteps[kind](target.userId) : null;
     const mainId = config.MAIN_CHANNEL_ID;

@@ -35,6 +35,7 @@ function row(over: Partial<BoardRow> = {}, status: Partial<PresenceStatus> = {})
       lastResult: { at: NOW - 120_000, ok: true },
       connectedToys: link.toys,
       heartbeatsWorking: true,
+      checkInsStopped: false,
       ...status,
     },
     since: null,
@@ -61,6 +62,7 @@ function session(over: Partial<Session> = {}): Session {
     graceTimer: null,
     triggerCount: 12,
     missedCount: 0,
+    throttledCount: 0,
     ...over,
   };
 }

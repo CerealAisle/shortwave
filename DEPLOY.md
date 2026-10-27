@@ -676,7 +676,7 @@ You turn tease on for her with `/tease`, and she uses her phone completely
 normally for a few hours. Meanwhile:
 
 ```bash
-journalctl -u lovense-bot -f | grep -E "heartbeat|Presence|suspend|resume"
+sudo /opt/lovense-bot/deploy/logs.sh --follow
 ```
 
 What you're measuring is the real gap between heartbeats on *her* phone and
@@ -694,9 +694,8 @@ journal.
 Review what actually happened:
 
 ```bash
-sudo sqlite3 /opt/lovense-bot/data/bot.db \
-  'SELECT datetime(created_at/1000,"unixepoch","localtime") AS t, description, source, ok, error
-     FROM command_log ORDER BY id DESC LIMIT 40;'
+sudo /opt/lovense-bot/deploy/db.sh commands 12     # every command, last 12 hours
+sudo /opt/lovense-bot/deploy/db.sh summary 12      # per hour
 ```
 
 The `source` column separates a first-attempt send from `:retry1` / `:retry2`,
@@ -709,9 +708,13 @@ so you can see how often iOS needed a nudge to wake up.
 ```bash
 sudo systemctl restart lovense-bot        # after a config change
 sudo systemctl stop lovense-bot           # stops toys first, then exits
-journalctl -u lovense-bot -f              # follow logs
+sudo /opt/lovense-bot/deploy/logs.sh      # connection/presence lines, last 12 hours
+sudo /opt/lovense-bot/deploy/db.sh        # command log, last 24 hours
 journalctl -u lovense-bot -p warning --since today
 ```
+
+`logs.sh --help` and `db.sh --help` list the rest (a time range, failures
+only, per-night summaries, linked apps).
 
 After editing `.env`, restart. After adding or changing a command, run
 `npm run build && npm run deploy-commands`, then restart.
