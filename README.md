@@ -399,7 +399,7 @@ owner) also sees:
 |---|---|
 | `/focus <toy>` | Which of her toys tease, buzz and pattern reach: **All connected toys**, or one toy by name or nickname. Saved, and applies at once — including to tease already running |
 | `/tease [intensity] [duration] [off]` | Tease on: others' messages buzz her focused toys, decided at each message. No expiry. Re-run while on to change strength or length. `off:True` turns it off and sends a stop, even during a `/stop` lockout |
-| `/buzz <intensity> <seconds>` | One-off vibration on her focused toys |
+| `/buzz <intensity> [seconds] [minutes]` | One-off vibration on her focused toys. `seconds` (up to 300) and `minutes` (up to 60) add together; give at least one |
 | `/pattern <name> [minutes]` | Play a named pattern from `patterns/` on her focused toys. The name autocompletes. `minutes` loops it for that long (max 60) |
 | `/status` | Deletes the status board and reposts it, pinned, in this channel; the bot keeps that copy updated from then on |
 | `/alarm <name> <time>` | Posts here, pinging you, at a clock time: `9pm`, `tomorrow 7:30am`, `fri 9pm`, `10/31 8pm`, optionally with a zone (`ET`, `PT`, `America/New_York`). Read in `TIMEZONE` otherwise; the reply shows the time in each viewer's own zone. Same name moves it; `time:off` cancels. Survives restarts |

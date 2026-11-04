@@ -19,6 +19,8 @@ import type { BotCommand } from '../types';
  * `off:True` turns it off instead. That path is never refused by a /stop
  * lockout (it only ever stops things), and it always sends a Stop, so it
  * also ends a buzz or pattern in progress.
+ *
+ * Every reply is ephemeral: only the controller sees it.
  */
 export const command: BotCommand = {
   data: new SlashCommandBuilder()
@@ -57,13 +59,14 @@ export const command: BotCommand = {
       if (!session) {
         // Nothing was teasing, but a /buzz or /pattern may be. Stop it anyway.
         void sessions.sendNow(uid, actions.stop(), 'tease-off').catch(() => {});
-        await interaction.reply(text.tease.wasNotOn(target.name));
+        await interaction.reply({ content: text.tease.wasNotOn(target.name), flags: MessageFlags.Ephemeral });
         return;
       }
       const minutes = Math.max(1, Math.round((Date.now() - session.armedAt) / 60_000));
-      await interaction.reply(
-        text.tease.turnedOff(target.name, session.triggerCount, session.missedCount, minutes),
-      );
+      await interaction.reply({
+        content: text.tease.turnedOff(target.name, session.triggerCount, session.missedCount, minutes),
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
@@ -83,7 +86,7 @@ export const command: BotCommand = {
     let status = presence.statusFor(target.link);
     let deferred = false;
     if (status.presence === 'offline') {
-      await interaction.deferReply();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       deferred = true;
       const check = await sessions.test(uid, { source: `tease-check:${interaction.user.id}` });
       if (!check.ok) {
@@ -118,6 +121,6 @@ export const command: BotCommand = {
         : '';
 
     if (deferred) await interaction.editReply(reply + problem + notConfirmed);
-    else await interaction.reply(reply + problem + notConfirmed);
+    else await interaction.reply({ content: reply + problem + notConfirmed, flags: MessageFlags.Ephemeral });
   },
 };

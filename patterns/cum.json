@@ -1,0 +1,6 @@
+{
+  "description": "Relentless: rolls smoothly between 85% and 100%, holding at full power",
+  "intervalMs": 300,
+  "steps": [85, 90, 95, 100, 100, 100, 100, 100, 100, 95, 90],
+  "durationSec": 60
+}

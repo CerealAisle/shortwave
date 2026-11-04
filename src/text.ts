@@ -280,11 +280,14 @@ export const text = {
   buzz: {
     describe: 'Vibrate her toys at a given strength for a given time',
     describeIntensity: 'Strength as a percentage',
-    describeSeconds: 'How long to run',
+    describeSeconds: 'How long to run, in seconds (adds to minutes)',
+    describeMinutes: (max: number) => `How long to run, in minutes (adds to seconds; max ${max})`,
+    /** Neither seconds nor minutes was given. */
+    noDuration: 'Give a length: `seconds`, `minutes`, or both.',
     /** The focus can't be reached right now. */
     cannot: (error: string) => `Can't buzz: ${error}.`,
     sent: (percent: number, sec: number, focus: string) =>
-      `Sent: ${percent}% for ${sec}s to ${focus}. \`/stop duration:0\` to cancel.`,
+      `Sent: ${percent}% for ${sec >= 120 ? `${Math.round(sec / 60)} minutes` : `${sec}s`} to ${focus}. \`/stop duration:0\` to cancel.`,
   },
 
   // ===========================================================================
