@@ -1,0 +1,5 @@
+{
+  "description": "A hard burst that drops quickly to a low, lingering hum",
+  "intervalMs": 250,
+  "steps": [100, 100, 100, 75, 50, 30, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15]
+}

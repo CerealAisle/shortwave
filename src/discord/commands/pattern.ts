@@ -95,7 +95,7 @@ export const command: BotCommand = {
     const { pattern } = loaded;
     const minutes = interaction.options.getNumber('minutes');
     const durationSec = minutes !== null ? Math.round(minutes * 60) : pattern.durationSec;
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       for (const toyId of targets.toyIds ?? [undefined]) {

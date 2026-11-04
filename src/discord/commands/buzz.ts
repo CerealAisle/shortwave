@@ -1,6 +1,7 @@
 import { MessageFlags, SlashCommandBuilder } from 'discord.js';
 import * as actions from '../../lovense/actions';
 import { makeUid } from '../../lovense/client';
+import { MAX_DURATION_SEC } from '../../lovense/patterns';
 import { focusTargets, getFocus } from '../../session/focus';
 import { sessions } from '../../session/manager';
 import { text } from '../../text';
@@ -10,7 +11,7 @@ import { requireTarget } from '../target';
 import type { BotCommand } from '../types';
 
 /**
- * Manual one-off: vibrate her focused toys at X% for X seconds.
+ * Manual one-off: vibrate her focused toys at X% for X seconds and/or minutes.
  *
  * This file is the template for new commands. The pattern is always:
  *   1. find the target, and the toys the focus means right now
@@ -38,8 +39,14 @@ export const command: BotCommand = {
         .setName('seconds')
         .setDescription(text.buzz.describeSeconds)
         .setMinValue(1)
-        .setMaxValue(300)
-        .setRequired(true),
+        .setMaxValue(300),
+    )
+    .addNumberOption((o) =>
+      o
+        .setName('minutes')
+        .setDescription(text.buzz.describeMinutes(MAX_DURATION_SEC / 60))
+        .setMinValue(0.1)
+        .setMaxValue(MAX_DURATION_SEC / 60),
     ),
 
   async execute(interaction) {
@@ -55,10 +62,17 @@ export const command: BotCommand = {
       return;
     }
 
+    // `seconds` and `minutes` add up, so "1 minute 30 seconds" works.
     const intensity = interaction.options.getInteger('intensity', true);
-    const seconds = interaction.options.getNumber('seconds', true);
+    const secondsOpt = interaction.options.getNumber('seconds');
+    const minutesOpt = interaction.options.getNumber('minutes');
+    if (secondsOpt === null && minutesOpt === null) {
+      await interaction.reply({ content: text.buzz.noDuration, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const seconds = Math.min(Math.round((secondsOpt ?? 0) + (minutesOpt ?? 0) * 60), MAX_DURATION_SEC);
 
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       for (const toyId of targets.toyIds ?? [undefined]) {

@@ -1,0 +1,6 @@
+{
+  "description": "Mostly still, with a gentle 5% nudge for 1s every 15s",
+  "intervalMs": 1000,
+  "steps": [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "durationSec": 900
+}
